@@ -764,6 +764,31 @@ input[type=text]:focus,.share-box input:focus {
   font-size: .8rem;
   white-space: nowrap;
 }
+.challenge-prompt {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  width: min(100%, 340px);
+  padding: 22px;
+  border: 1px solid rgba(255,255,255,.17);
+  border-radius: 19px;
+  background: rgba(20,27,59,.96);
+  box-shadow: 0 16px 42px rgba(0,0,0,.48);
+}
+.challenge-prompt__title,
+.challenge-prompt__copy {
+  margin: 0;
+}
+.challenge-prompt__title {
+  font-size: 1.1rem;
+  font-weight: 900;
+}
+.challenge-prompt__copy {
+  color: #c1c8e2;
+  font-size: .86rem;
+  font-weight: 650;
+  line-height: 1.45;
+}
 .log {
   display: flex;
   flex-direction: column;

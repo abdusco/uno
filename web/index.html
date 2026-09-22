@@ -198,11 +198,13 @@
 
       <!-- Wild Draw Four response; only the affected player receives it. -->
       <div class="overlay" x-show="canChallengeWild4" x-cloak>
-        <p>Wild Draw Four!</p>
-        <p>Accept 4 cards, or challenge if you think it was played illegally.</p>
-        <div class="draw-prompt__actions">
-          <button class="btn btn--primary" @click="acceptWildDrawFour()">Draw 4</button>
-          <button class="btn" @click="challengeWildDrawFour()">Challenge</button>
+        <div class="challenge-prompt">
+          <p class="challenge-prompt__title">Wild Draw Four!</p>
+          <p class="challenge-prompt__copy">Accept 4 cards, or challenge if you think it was played illegally.</p>
+          <div class="draw-prompt__actions">
+            <button class="btn btn--primary" @click="acceptWildDrawFour()">Draw 4</button>
+            <button class="btn" @click="challengeWildDrawFour()">Challenge</button>
+          </div>
         </div>
       </div>
 
