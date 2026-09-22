@@ -2,6 +2,7 @@ package main
 
 import (
 	"errors"
+	"fmt"
 	"testing"
 	"testing/synctest"
 	"time"
@@ -185,7 +186,7 @@ func TestRoomPlayerLimit(t *testing.T) {
 	r := newRoom("FULL1", "Full Room")
 	var first *joinResult
 	for i := 0; i < maxRoomPlayers; i++ {
-		joined := joinRoom(t, r, "Player")
+		joined := joinRoom(t, r, fmt.Sprintf("Player%d", i))
 		if i == 0 {
 			first = joined
 		}

@@ -7,6 +7,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/samber/lo"
 )
 
 // roomCodeAlphabet excludes visually ambiguous characters (0/O, 1/I/L).
@@ -251,13 +253,7 @@ func (r *room) run() {
 }
 
 func (r *room) connectedPlayers() int {
-	n := 0
-	for _, p := range r.players {
-		if p.connected {
-			n++
-		}
-	}
-	return n
+	return lo.CountBy(lo.Values(r.players), func(p *player) bool { return p.connected })
 }
 
 func (r *room) handleJoin(req *joinReq) {
@@ -322,22 +318,19 @@ func (r *room) handleJoin(req *joinReq) {
 	// confusing at the table and in the activity log. Compares against every
 	// seat, connected or not, since a disconnected player's name is still
 	// reserved for their eventual reconnect.
-	for _, existing := range r.players {
-		if strings.EqualFold(strings.TrimSpace(existing.name), strings.TrimSpace(req.name)) {
-			req.result <- &joinResult{err: ErrNameTaken{}}
-			return
-		}
+	nameTaken := lo.SomeBy(lo.Values(r.players), func(existing *player) bool {
+		return strings.EqualFold(strings.TrimSpace(existing.name), strings.TrimSpace(req.name))
+	})
+	if nameTaken {
+		req.result <- &joinResult{err: ErrNameTaken{}}
+		return
 	}
 	// If nobody currently connected is host - a brand new room, or one
 	// where the host disconnected and never made it back - the next person
 	// in gets promoted, so the room is never stuck hostless.
-	hasHost := false
-	for _, existing := range r.players {
-		if existing.isHost && existing.connected {
-			hasHost = true
-			break
-		}
-	}
+	hasHost := lo.SomeBy(lo.Values(r.players), func(existing *player) bool {
+		return existing.isHost && existing.connected
+	})
 	isHost := req.asHost || !hasHost
 	if isHost {
 		// Enforce "at most one host": if promotion is happening because
@@ -372,12 +365,7 @@ func (r *room) handleJoin(req *joinReq) {
 // token. Rooms are small (a handful of players), so a linear scan is fine
 // and avoids keeping a second map in sync.
 func (r *room) findByToken(token string) (*player, bool) {
-	for _, p := range r.players {
-		if p.token == token {
-			return p, true
-		}
-	}
-	return nil, false
+	return lo.Find(lo.Values(r.players), func(p *player) bool { return p.token == token })
 }
 
 func (r *room) handleLeave(lr leaveReq) {
@@ -400,15 +388,16 @@ func (r *room) handleLeave(lr leaveReq) {
 	// gets it back automatically on reconnect instead of the room becoming
 	// permanently hostless.
 	if p.isHost {
-		for _, oid := range r.order {
+		nextHostID, found := lo.Find(r.order, func(oid string) bool {
 			if oid == lr.playerID {
-				continue
+				return false
 			}
-			if next, ok := r.players[oid]; ok && next.connected {
-				p.isHost = false
-				next.isHost = true
-				break
-			}
+			next, ok := r.players[oid]
+			return ok && next.connected
+		})
+		if found {
+			p.isHost = false
+			r.players[nextHostID].isHost = true
 		}
 	}
 
@@ -433,13 +422,10 @@ func (r *room) connectedInGame() int {
 	if g == nil {
 		return 0
 	}
-	n := 0
-	for _, id := range g.order {
-		if p, ok := r.players[id]; ok && p.connected {
-			n++
-		}
-	}
-	return n
+	return lo.CountBy(g.order, func(id string) bool {
+		p, ok := r.players[id]
+		return ok && p.connected
+	})
 }
 
 // autoSkipDisconnected advances the turn past any current player who's
@@ -674,9 +660,8 @@ func (r *room) stateFor(id string, gamePlayers []gamePlayerView, top Card, logCo
 
 func (r *room) gamePlayerViews() []gamePlayerView {
 	g := r.game
-	views := make([]gamePlayerView, 0, len(g.order))
-	for _, id := range g.order {
-		views = append(views, gamePlayerView{
+	return lo.Map(g.order, func(id string, _ int) gamePlayerView {
+		return gamePlayerView{
 			ID:            id,
 			Name:          r.nameOf(id),
 			HandCount:     len(g.hands[id]),
@@ -684,9 +669,8 @@ func (r *room) gamePlayerViews() []gamePlayerView {
 			UnoCalled:     g.unoCalled[id],
 			UnoCatchable:  g.unoCatchableID == id,
 			Connected:     r.players[id] != nil && r.players[id].connected,
-		})
-	}
-	return views
+		}
+	})
 }
 
 func (r *room) broadcastState() {
@@ -740,13 +724,13 @@ func (r *room) viewOf(p *player) *playerView {
 }
 
 func (r *room) playerViews() []playerView {
-	views := make([]playerView, 0, len(r.order))
-	for _, id := range r.order {
-		if p, ok := r.players[id]; ok {
-			views = append(views, *r.viewOf(p))
+	return lo.FilterMap(r.order, func(id string, _ int) (playerView, bool) {
+		p, ok := r.players[id]
+		if !ok {
+			return playerView{}, false
 		}
-	}
-	return views
+		return *r.viewOf(p), true
+	})
 }
 
 func (r *room) broadcastPlayers() {

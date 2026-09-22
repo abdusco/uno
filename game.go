@@ -3,6 +3,8 @@ package main
 import (
 	"crypto/rand"
 	"fmt"
+
+	"github.com/samber/lo"
 )
 
 func capitalize(s string) string {
@@ -260,13 +262,7 @@ func (g *gameState) playCard(playerID, cardID, chosenColor string, nameOf func(s
 		return ErrIllegalMove{Message: "that card doesn't match the discard pile"}
 	}
 	if card.Color == "wild" {
-		valid := false
-		for _, c := range colors {
-			if c == chosenColor {
-				valid = true
-			}
-		}
-		if !valid {
+		if !lo.Contains(colors, chosenColor) {
 			return ErrIllegalMove{Message: "pick a color for the wild card"}
 		}
 	}
@@ -325,14 +321,7 @@ func (g *gameState) playCard(playerID, cardID, chosenColor string, nameOf func(s
 		}
 		logLine += fmt.Sprintf(" \u2014 %s may challenge", nameOf(victim))
 	case "colorbomb":
-		var kept, dumped []Card
-		for _, hc := range g.hands[playerID] {
-			if hc.Color == chosenColor {
-				dumped = append(dumped, hc)
-			} else {
-				kept = append(kept, hc)
-			}
-		}
+		dumped, kept := lo.FilterReject(g.hands[playerID], func(hc Card, _ int) bool { return hc.Color == chosenColor })
 		if len(dumped) > 0 {
 			g.hands[playerID] = kept
 			g.discard = append(g.discard, dumped...)
@@ -540,13 +529,7 @@ func (g *gameState) reshuffle() {
 // discarded into the void - there's no persistence to reconcile against
 // anyway.
 func (g *gameState) removePlayer(playerID string) {
-	idx := -1
-	for i, pid := range g.order {
-		if pid == playerID {
-			idx = i
-			break
-		}
-	}
+	idx := lo.IndexOf(g.order, playerID)
 	if idx == -1 {
 		return
 	}
