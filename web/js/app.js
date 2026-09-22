@@ -395,14 +395,39 @@ document.addEventListener('alpine:init', () => {
           break;
         case 'error':
           this.errorMsg = msg.message || 'Something went wrong.';
-          if (this.screen === 'name' && this.joiningRoom) {
-            // An auto-resume attempt from a cached identity failed outright
-            // (e.g. the room itself is gone) - drop the stale cache so it
-            // doesn't keep retrying, and let the player join fresh.
-            this.clearCachedIdentity(this.joiningRoom);
-          }
+          if (msg.message === 'room not found' && this.joiningRoom) this.resetMissingRoom();
           break;
       }
+    },
+
+    /**
+     * Rooms are intentionally memory-only. A server restart therefore makes
+     * old /r/CODE links and their saved reconnect tokens invalid. Clear that
+     * local identity and return to the normal entry route instead of leaving
+     * the player on a link that can never succeed.
+     * @returns {void}
+     */
+    resetMissingRoom() {
+      const missingRoom = this.joiningRoom;
+      this.clearCachedIdentity(missingRoom);
+      if (this.ws) {
+        const staleSocket = this.ws;
+        this.ws = null;
+        staleSocket.close();
+      }
+      if (this._reconnectTimer) {
+        clearTimeout(this._reconnectTimer);
+        this._reconnectTimer = null;
+      }
+      this.joiningRoom = null;
+      this.roomId = '';
+      this.selfId = '';
+      this.token = '';
+      this._firstHello = null;
+      this.status = 'ready';
+      this.errorMsg = 'That room no longer exists. Create a new room or join one with a code.';
+      history.replaceState({}, '', '/');
+      this.$nextTick(() => this.$refs.nameInput && this.$refs.nameInput.focus());
     },
 
     /** @returns {void} */
