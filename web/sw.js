@@ -1,4 +1,4 @@
-const CACHE_NAME = 'uno-party-v26';
+const CACHE_NAME = 'uno-party-v27';
 const SHELL_ASSETS = [
   '/',
   '/index.html',
@@ -7,6 +7,7 @@ const SHELL_ASSETS = [
   '/vendor/alpine.min.js',
   '/vendor/qrcode.js',
   '/manifest.json',
+  '/uno.svg',
   '/icons/icon-192.png',
   '/icons/icon-512.png',
   '/icons/apple-touch-icon.png',

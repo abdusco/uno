@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-  <title>Uno Party</title>
+  <title>uno:party</title>
 
   <link rel="manifest" href="/manifest.json">
   <meta name="theme-color" content="#dc2626">
@@ -11,7 +11,7 @@
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
   <link rel="apple-touch-icon" href="/icons/apple-touch-icon.png">
-  <link rel="icon" href="/icons/icon-192.png">
+  <link rel="icon" type="image/svg+xml" href="/uno.svg">
 
   <link rel="stylesheet" href="/css/style.css">
 </head>
@@ -29,7 +29,8 @@
     <!-- screen 1: ask for a name -->
     <section class="screen" x-show="screen === 'name'" x-cloak>
       <div class="card">
-        <h1>🎴 Uno Party</h1>
+        <div class="brand-mark"><img class="brand-logo" src="/uno.svg" alt=""></div>
+        <h1 class="brand-heading"><span>uno:party</span></h1>
         <p class="subtitle" x-show="joiningRoom" x-text="`Joining room ${joiningRoom}`"></p>
         <form @submit.prevent="submitName()">
           <label class="field">
@@ -105,6 +106,7 @@
 
         <header class="game-header">
           <div class="game-header__topline">
+            <img class="game-header__logo" src="/uno.svg" alt="uno:party">
             <span class="room-chip" x-text="`Room ${roomId}`"></span>
             <button class="music-toggle" type="button" @click="toggleMusic()"
                     :aria-pressed="musicEnabled" :title="musicEnabled ? 'Turn music off' : 'Turn music on'">

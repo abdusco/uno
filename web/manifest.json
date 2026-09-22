@@ -1,6 +1,6 @@
 {
-  "name": "Uno Party",
-  "short_name": "Uno Party",
+  "name": "uno:party",
+  "short_name": "uno:party",
   "description": "Play Uno with friends in real time.",
   "start_url": "/",
   "scope": "/",

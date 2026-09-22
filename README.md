@@ -1,4 +1,8 @@
-# UNO Party
+<p align="center">
+  <img src="web/uno.svg" alt="uno:party" width="180">
+</p>
+
+# uno:party
 
 A lightweight, realtime multiplayer UNO game that runs as an installable PWA.
 Create a room, share its link or QR code, and play together from any browser.
