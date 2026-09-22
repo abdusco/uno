@@ -12,6 +12,53 @@ const MUSIC_STEP_SECONDS = 0.18;
 // row, subtracted from the viewport width to get available card-row width.
 const HAND_SIDE_PADDING = 24;
 
+// Four harmonically distinct chords underlying the background music: Cmaj7,
+// Am7, Fmaj7 and G7. Each MUSIC_LEAD_PHRASES entry is a 32-step melody over
+// these same four chords (8 steps each); one is picked at random every time
+// the sequence loops back to step 0, so the loop doesn't play the identical
+// melody every repeat.
+const MUSIC_CHORDS = [
+  [261.63, 329.63, 392, 493.88],
+  [220, 261.63, 329.63, 392],
+  [174.61, 220, 261.63, 329.63],
+  [196, 246.94, 293.66, 349.23],
+];
+const MUSIC_BASS_ROOTS = [130.81, 110, 87.31, 98];
+const MUSIC_LEAD_PHRASES = [
+  [
+    659.25, null, 783.99, 880, null, 783.99, 659.25, 587.33,
+    523.25, null, 659.25, 783.99, 659.25, null, 587.33, null,
+    523.25, 659.25, null, 698.46, 783.99, null, 698.46, 659.25,
+    587.33, null, 659.25, 783.99, 880, 783.99, 698.46, 587.33,
+  ],
+  [
+    880, 783.99, null, 659.25, 587.33, null, 659.25, 783.99,
+    783.99, null, 659.25, 523.25, null, 587.33, 659.25, null,
+    698.46, null, 783.99, 659.25, null, 523.25, 587.33, null,
+    783.99, 659.25, null, 587.33, 523.25, null, 587.33, 659.25,
+  ],
+  [
+    587.33, null, null, 659.25, null, 783.99, null, null,
+    523.25, null, null, null, 587.33, null, 659.25, null,
+    698.46, null, null, 783.99, null, null, 659.25, null,
+    880, null, 783.99, null, 698.46, null, 587.33, null,
+  ],
+  // Dense, rest-free arpeggio run - closer to a chiptune/arcade lead.
+  [
+    523.25, 659.25, 783.99, 659.25, 523.25, 659.25, 783.99, 880,
+    523.25, 659.25, 523.25, 587.33, 523.25, 659.25, 587.33, 523.25,
+    587.33, 698.46, 783.99, 698.46, 587.33, 698.46, 783.99, 880,
+    587.33, 698.46, 783.99, 880, 987.77, 880, 783.99, 698.46,
+  ],
+  // Octave-jumpy "power up" flourish, also arcade-flavored.
+  [
+    783.99, null, 880, 783.99, 659.25, null, 783.99, 880,
+    659.25, 587.33, null, 659.25, 523.25, null, 587.33, 659.25,
+    698.46, null, 783.99, 880, 783.99, null, 698.46, 783.99,
+    880, 987.77, 880, 783.99, 698.46, 587.33, null, 880,
+  ],
+];
+
 /**
  * @typedef {Object} Player
  * @property {string} id
@@ -162,6 +209,9 @@ document.addEventListener('alpine:init', () => {
     /** @type {number|null} */
     musicFadeTimer: null,
     musicStep: 0,
+    // index into MUSIC_LEAD_PHRASES for the melody currently playing;
+    // re-rolled each time the 32-step sequence loops back to its start.
+    currentLeadPhrase: 0,
     lastDiscardCardId: '',
 
     /** @returns {void} */
@@ -563,30 +613,24 @@ document.addEventListener('alpine:init', () => {
     /** @returns {void} */
     playMusicStep() {
       if (!this.audioContext || !this.musicGain || this.audioContext.state !== 'running') return;
-      // Four harmonically distinct phrases: Cmaj7, Am7, Fmaj7 and G7. A
-      // syncopated lead sits over a rotating arpeggio, with bass on quarter
-      // notes and a tiny pitched click on the offbeats.
-      const chords = [
-        [261.63, 329.63, 392, 493.88],
-        [220, 261.63, 329.63, 392],
-        [174.61, 220, 261.63, 329.63],
-        [196, 246.94, 293.66, 349.23],
-      ];
-      const bassRoots = [130.81, 110, 87.31, 98];
-      const lead = [
-        659.25, null, 783.99, 880, null, 783.99, 659.25, 587.33,
-        523.25, null, 659.25, 783.99, 659.25, null, 587.33, null,
-        523.25, 659.25, null, 698.46, 783.99, null, 698.46, 659.25,
-        587.33, null, 659.25, 783.99, 880, 783.99, 698.46, 587.33,
-      ];
-      const step = this.musicStep % lead.length;
+      const step = this.musicStep % 32;
+      // Re-roll which melody plays over the next 32 steps, favoring a
+      // different one than just finished so it's noticeable.
+      if (step === 0 && MUSIC_LEAD_PHRASES.length > 1) {
+        let next = this.currentLeadPhrase;
+        while (next === this.currentLeadPhrase) {
+          next = Math.floor(Math.random() * MUSIC_LEAD_PHRASES.length);
+        }
+        this.currentLeadPhrase = next;
+      }
+      const lead = MUSIC_LEAD_PHRASES[this.currentLeadPhrase];
       const chordIndex = Math.floor(step / 8);
-      const chord = chords[chordIndex];
+      const chord = MUSIC_CHORDS[chordIndex];
       const now = this.audioContext.currentTime;
 
       this.scheduleMusicNote(chord[step % chord.length], now, .3, 'sine', .012);
       if (step % 4 === 0) {
-        this.scheduleMusicNote(bassRoots[chordIndex], now, .58, 'triangle', .024);
+        this.scheduleMusicNote(MUSIC_BASS_ROOTS[chordIndex], now, .58, 'triangle', .024);
       }
       if (lead[step]) {
         this.scheduleMusicNote(lead[step], now, step % 4 === 0 ? .28 : .18, 'triangle', .02);
