@@ -377,11 +377,17 @@ document.addEventListener('alpine:init', () => {
           break;
         case 'started':
           this.gameOver = null;
+          this.errorMsg = '';
           this.canChallengeWild4 = false;
           this.screen = 'game';
           this.startMusic();
           break;
         case 'state':
+          // A state transition supersedes transient action errors. This is
+          // especially important for simultaneous UNO catches: one catcher
+          // may lose the race while the successful catch immediately
+          // broadcasts the authoritative state.
+          this.errorMsg = '';
           const previousDiscardId = this.lastDiscardCardId;
           const previousDeckCount = this.deckCount;
           const previousGamePlayers = this.gamePlayers;
@@ -419,6 +425,7 @@ document.addEventListener('alpine:init', () => {
           break;
         case 'gameOver':
           this.gameOver = { winnerId: msg.winnerId, winnerName: msg.winnerName };
+          this.errorMsg = '';
           this.pendingWildCard = null;
           this.canChallengeWild4 = false;
           this.stopMusic(true);
@@ -927,6 +934,8 @@ document.addEventListener('alpine:init', () => {
      */
     catchUno(targetId) {
       if (!this.ws) return;
+      const target = this.gamePlayers.find(player => player.id === targetId);
+      if (this.gameOver || !target || !this.isCatchable(target)) return;
       this.ws.send(JSON.stringify({ type: 'catchUno', targetId }));
     },
 
@@ -939,6 +948,13 @@ document.addEventListener('alpine:init', () => {
     /** @returns {void} */
     backToLobby() {
       this.gameOver = null;
+      this.errorMsg = '';
+      this.gamePlayers = [];
+      this.hand = [];
+      this.yourTurn = false;
+      this.currentPlayerId = '';
+      this.yourDrawnCard = null;
+      this.canChallengeWild4 = false;
       this.screen = 'lobby';
     },
   }));
