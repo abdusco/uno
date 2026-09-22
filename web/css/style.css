@@ -146,6 +146,21 @@ input[type="text"]:focus {
   margin-top: 0;
 }
 
+.qr-code {
+  display: flex;
+  justify-content: center;
+  margin-top: 14px;
+}
+
+.qr-code svg {
+  width: 160px;
+  height: 160px;
+  border-radius: 10px;
+  padding: 10px;
+  background: #fff;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, .12);
+}
+
 .hint {
   color: var(--muted);
   font-size: .85rem;
@@ -191,6 +206,15 @@ input[type="text"]:focus {
   font-size: .85rem;
 }
 
+.disconnected-badge {
+  font-size: .7rem;
+  text-transform: uppercase;
+  background: var(--muted);
+  color: white;
+  padding: 2px 8px;
+  border-radius: 999px;
+}
+
 .error {
   color: var(--red-dark);
   font-size: .85rem;
@@ -213,6 +237,23 @@ input[type="text"]:focus {
 .overlay .btn {
   width: auto;
   padding: 10px 20px;
+}
+
+.toast {
+  position: fixed;
+  top: max(16px, env(safe-area-inset-top));
+  left: 0;
+  right: 0;
+  margin: 0 auto;
+  width: max-content;
+  background: rgba(22,163,74,.95);
+  color: white;
+  font-weight: 600;
+  font-size: .85rem;
+  padding: 8px 16px;
+  border-radius: 999px;
+  box-shadow: 0 8px 20px rgba(0,0,0,.3);
+  z-index: 60;
 }
 
 /* --- game table --- */
@@ -341,6 +382,12 @@ input[type="text"]:focus {
   font-size: .75rem;
 }
 
+.opponents__disconnected {
+  color: rgba(255,255,255,.5);
+  font-size: .7rem;
+  font-style: italic;
+}
+
 .opponents__catch {
   background: var(--red);
   color: white;
@@ -432,7 +479,7 @@ input[type="text"]:focus {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  font-size: 1.7rem;
+  font-size: 2.3rem;
   font-weight: 800;
   color: white;
   flex-shrink: 0;
@@ -451,24 +498,20 @@ input[type="text"]:focus {
   cursor: not-allowed;
 }
 
-/* Hand cards fan out on a slight arc - `--i` is each card's offset from
-   the center of the hand and `--n` the hand size (both set inline per
-   card); `--raise` (0 or 1, also inline) lifts playable cards on your
-   turn. The per-card angle and arc dip are scaled down as `--n` grows
-   (min() against a shrinking budget) so a bigger hand fans out flatter
-   instead of needing more vertical room. All of this lives in one
-   formula, rather than split between an inline style and a CSS class, so
-   the :hover/:active states below can still layer on top via ordinary CSS
-   specificity instead of fighting an inline `transform`. */
+/* Hand cards sit flat - no fan/rotation. `--raise` (0 or 1, set inline
+   per card) lifts playable cards on your turn; `margin-right` is the
+   uniform per-card gap computed once in app.js's handCardGap() and set
+   as `--card-gap` on the `.hand` container below - trailing margin, not
+   leading, so it's a no-op at both the hand's start and every row-wrap
+   boundary (see handCardGap()'s doc comment for why that matters).
+   Keeping --raise in one formula rather than split between an inline
+   style and a CSS class lets the :hover/:active states below layer on
+   top via ordinary CSS specificity instead of fighting an inline
+   `transform`. */
 .hand button.uno-card {
-  --i: 0;
-  --n: 1;
   --raise: 0;
-  --angle: min(3deg, 22deg / var(--n));
-  --dip: min(1.5px, 14px / var(--n));
-  transform-origin: 50% 140%;
-  transform: rotate(calc(var(--i) * var(--angle)))
-             translateY(calc(var(--i) * var(--i) * var(--dip) - var(--raise) * 14px));
+  margin-right: var(--card-gap, 8px);
+  transform: translateY(calc(var(--raise) * -14px));
 }
 
 .hand button.uno-card:not(.uno-card--disabled) {
@@ -476,13 +519,11 @@ input[type="text"]:focus {
 }
 
 .hand button.uno-card:hover {
-  transform: rotate(calc(var(--i) * var(--angle)))
-             translateY(calc(var(--i) * var(--i) * var(--dip) - var(--raise) * 20px));
+  transform: translateY(calc(var(--raise) * -20px));
 }
 
 .hand button.uno-card:active {
-  transform: rotate(calc(var(--i) * var(--angle)))
-             translateY(calc(var(--i) * var(--i) * var(--dip) - var(--raise) * 8px)) scale(.96);
+  transform: translateY(calc(var(--raise) * -8px)) scale(.96);
 }
 
 .pile--discard .uno-card {
@@ -498,22 +539,24 @@ input[type="text"]:focus {
   background: linear-gradient(to top, rgba(15,10,20,.95), rgba(15,10,20,.75) 80%, transparent);
 }
 
+/* The hand is one flat, wrapping flex row - the browser's own flex-wrap
+   does the actual row-breaking. `--card-gap` (set inline from
+   handCardGap()) is sized so lines break into roughly-equal rows with at
+   most 30% card overlap, rather than manually splitting the hand into
+   row arrays in JS/the template. justify-content centers each wrapped
+   line independently (part of the flexbox spec, not just the whole
+   container), which is what gives every row - including a shorter last
+   one - its own centered look. */
 .hand {
   display: flex;
-  gap: 8px;
-  width: max-content;
-  max-width: 100%;
-  margin: 0 auto;
-  overflow-x: auto;
-  /* vertical overflow (raised/fanned cards swinging above or below their
-     own layout box) is never clipped; only sideways scrolling is - modern
-     Chrome/Firefox support this independently of overflow-x, unlike the
-     older CSS2.1 rule that forced both axes to agree. */
-  overflow-y: visible;
-  /* extra side padding so the outer fanned (rotated) cards, which swing
-     sideways beyond their own unrotated layout box, aren't clipped by
-     this scroll container's box. */
-  padding: 6px 20px;
+  flex-wrap: wrap;
+  justify-content: center;
+  row-gap: 10px;
+  max-height: 45vh;
+  overflow-y: auto;
+  /* top/bottom padding so raised cards have room to lift without being
+     clipped by this scroll container's box. */
+  padding: 20px 12px;
 }
 
 .uno-fab {

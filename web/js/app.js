@@ -1,8 +1,20 @@
+// Must match the .uno-card width and normal gap in style.css - used to
+// compute how many hand cards fit per row (see handCardGap()).
+const CARD_WIDTH = 72;
+const CARD_GAP = 8;
+// Cards in a row never overlap by more than this fraction of their width
+// before the hand splits into another row instead.
+const MAX_CARD_OVERLAP = 0.3;
+// Rough horizontal padding budget (both sides combined) around the hand
+// row, subtracted from the viewport width to get available card-row width.
+const HAND_SIDE_PADDING = 24;
+
 /**
  * @typedef {Object} Player
  * @property {string} id
  * @property {string} name
  * @property {boolean} isHost
+ * @property {boolean} connected
  */
 
 /**
@@ -18,6 +30,7 @@
  * @property {string} name
  * @property {number} handCount
  * @property {boolean} isCurrentTurn
+ * @property {boolean} connected
  */
 
 /**
@@ -27,6 +40,8 @@
  * @property {string} [room]
  * @property {boolean} create
  * @property {string} [roomName]
+ * @property {string} [token] - cached from a previous "joined", lets the
+ *   server resume that identity instead of treating this as a new player.
  */
 
 /**
@@ -45,6 +60,9 @@
  * @property {number} [deckCount]
  * @property {string[]} [log]
  * @property {Card} [yourDrawnCard]
+ * @property {string} [token] - only on "joined"; cache it for next time.
+ * @property {boolean} [resumed] - only on "joined"; true if this reconnected
+ *   an existing player rather than creating a new one.
  * @property {string} [winnerId]
  * @property {string} [winnerName]
  */
@@ -70,6 +88,9 @@ document.addEventListener('alpine:init', () => {
     /** @type {Player[]} */
     players: [],
     shareLink: '',
+    // pre-rendered <svg> markup for the share link's QR code, injected via
+    // x-html; rebuilt whenever shareLink changes (see renderQrCode()).
+    qrSvg: '',
     copied: false,
     errorMsg: '',
 
@@ -81,6 +102,13 @@ document.addEventListener('alpine:init', () => {
     reconnectAttempts: 0,
     /** @type {number|null} */
     _reconnectTimer: null,
+    // opaque secret handed back on "joined" - cached in localStorage
+    // (keyed by room code) so a dropped connection or a full page reload
+    // can resume this same identity instead of joining as someone new.
+    token: '',
+    // true right after a "joined" that resumed an existing player, for a
+    // brief "reconnected" toast; cleared automatically.
+    justResumed: false,
 
     // --- in-game state, populated by "state" messages ---
     /** @type {Card[]} */
@@ -109,14 +137,65 @@ document.addEventListener('alpine:init', () => {
     /** @type {{winnerId: string, winnerName: string}|null} */
     gameOver: null,
 
+    // tracked reactively so handCardGap() re-runs on resize - e.g. a
+    // phone rotating, or a desktop window being narrowed.
+    viewportWidth: window.innerWidth,
+
     /** @returns {void} */
     init() {
+      window.addEventListener('resize', () => {
+        this.viewportWidth = window.innerWidth;
+      });
+      this.registerServiceWorker();
       const match = window.location.pathname.match(/^\/r\/([A-Za-z0-9]{4,8})$/);
       if (match) {
         this.joiningRoom = match[1].toUpperCase();
+        const cached = this.loadCachedIdentity(this.joiningRoom);
+        if (cached) {
+          this.name = cached.name;
+          this.connect({ type: 'hello', name: cached.name, room: this.joiningRoom, create: false, token: cached.token });
+          return;
+        }
       }
-      this.registerServiceWorker();
       this.$nextTick(() => this.$refs.nameInput && this.$refs.nameInput.focus());
+    },
+
+    /**
+     * @param {string} roomCode
+     * @returns {{token: string, name: string}|null}
+     */
+    loadCachedIdentity(roomCode) {
+      try {
+        const raw = localStorage.getItem(`uno:player:${roomCode}`);
+        return raw ? JSON.parse(raw) : null;
+      } catch {
+        return null; // private browsing, storage disabled, corrupt JSON, etc.
+      }
+    },
+
+    /**
+     * @param {string} roomCode
+     * @param {{token: string, name: string}} identity
+     * @returns {void}
+     */
+    cacheIdentity(roomCode, identity) {
+      try {
+        localStorage.setItem(`uno:player:${roomCode}`, JSON.stringify(identity));
+      } catch {
+        // non-fatal - just means a reload won't auto-resume this time.
+      }
+    },
+
+    /**
+     * @param {string} roomCode
+     * @returns {void}
+     */
+    clearCachedIdentity(roomCode) {
+      try {
+        localStorage.removeItem(`uno:player:${roomCode}`);
+      } catch {
+        // nothing to clean up if storage isn't available anyway.
+      }
     },
 
     /** @returns {void} */
@@ -160,32 +239,45 @@ document.addEventListener('alpine:init', () => {
 
       this.status = 'connecting';
       const proto = window.location.protocol === 'https:' ? 'wss' : 'ws';
-      this.ws = new WebSocket(`${proto}://${window.location.host}/ws`);
+      // Captured by reference in every listener below, so a stale socket
+      // from a superseded connection attempt can tell it's been replaced
+      // and no-op instead of acting - without this guard, an old socket's
+      // *own* eventual 'close' (it's still a live object even once
+      // abandoned; nothing unsubscribes its listeners) fires
+      // scheduleReconnect() again even after a newer connection already
+      // succeeded, which reconnects, gets kicked because that same-token
+      // takeover naturally displaces this tab's own newest connection,
+      // fires *that* socket's 'close' too, and so on - an unbounded
+      // reconnect ping-pong with nothing ever wrong on the network.
+      const ws = new WebSocket(`${proto}://${window.location.host}/ws`);
+      this.ws = ws;
 
-      this.ws.addEventListener('open', () => {
+      ws.addEventListener('open', () => {
+        if (this.ws !== ws) return;
         this.status = 'ready';
         this.reconnectAttempts = 0;
-        this.ws.send(JSON.stringify(helloMsg));
+        ws.send(JSON.stringify(helloMsg));
       });
 
-      this.ws.addEventListener('message', (event) => {
+      ws.addEventListener('message', (event) => {
+        if (this.ws !== ws) return;
         this.handleMessage(JSON.parse(event.data));
       });
 
-      this.ws.addEventListener('close', () => {
+      ws.addEventListener('close', () => {
+        if (this.ws !== ws) return;
         if (this.screen === 'name') {
           this.status = 'ready';
           return;
         }
         // Any drop past this point (mobile screen lock, wifi hiccup, a
         // laptop sleeping) gets retried automatically with backoff rather
-        // than dumping the player onto a manual "reload" screen. Note this
-        // rejoins as a brand-new player - there's no session/reconnect
-        // token, so a mid-game drop still loses that player's old seat.
+        // than dumping the player onto a manual "reload" screen.
         this.scheduleReconnect();
       });
 
-      this.ws.addEventListener('error', () => {
+      ws.addEventListener('error', () => {
+        if (this.ws !== ws) return;
         if (this.screen === 'name') {
           this.errorMsg = 'Could not connect. Please try again.';
           this.status = 'ready';
@@ -212,7 +304,7 @@ document.addEventListener('alpine:init', () => {
      */
     buildReconnectHello() {
       if (this.roomId) {
-        return { type: 'hello', name: this.name.trim(), room: this.roomId, create: false };
+        return { type: 'hello', name: this.name.trim(), room: this.roomId, create: false, token: this.token };
       }
       return this._firstHello;
     },
@@ -229,8 +321,21 @@ document.addEventListener('alpine:init', () => {
           this.isHost = msg.self.isHost;
           this.players = msg.players || [];
           this.shareLink = `${window.location.origin}/r/${this.roomId}`;
+          this.renderQrCode();
           history.pushState({}, '', `/r/${this.roomId}`);
-          this.screen = 'lobby';
+          this.token = msg.token || '';
+          this.cacheIdentity(this.roomId, { token: this.token, name: this.name });
+          // Don't clobber the game screen if this is a live-drop reconnect
+          // mid-game - a personalized "state" is on its way right behind
+          // this and will flip it back; only force the lobby screen when
+          // there isn't already a game in progress to return to.
+          if (!msg.resumed || this.screen !== 'game') {
+            this.screen = 'lobby';
+          }
+          if (msg.resumed) {
+            this.justResumed = true;
+            setTimeout(() => (this.justResumed = false), 2000);
+          }
           break;
         case 'players':
           this.players = msg.players || [];
@@ -253,6 +358,9 @@ document.addEventListener('alpine:init', () => {
           this.deckCount = msg.deckCount || 0;
           this.log = msg.log || [];
           this.yourDrawnCard = msg.yourDrawnCard || null;
+          // A resumed mid-game player gets here via "joined" + an
+          // immediate personalized "state", never a fresh "started".
+          this.screen = 'game';
           break;
         case 'gameOver':
           this.gameOver = { winnerId: msg.winnerId, winnerName: msg.winnerName };
@@ -260,6 +368,12 @@ document.addEventListener('alpine:init', () => {
           break;
         case 'error':
           this.errorMsg = msg.message || 'Something went wrong.';
+          if (this.screen === 'name' && this.joiningRoom) {
+            // An auto-resume attempt from a cached identity failed outright
+            // (e.g. the room itself is gone) - drop the stale cache so it
+            // doesn't keep retrying, and let the player join fresh.
+            this.clearCachedIdentity(this.joiningRoom);
+          }
           break;
       }
     },
@@ -268,6 +382,25 @@ document.addEventListener('alpine:init', () => {
     startGame() {
       if (!this.ws) return;
       this.ws.send(JSON.stringify({ type: 'start' }));
+    },
+
+    /**
+     * Builds an <svg> QR code for shareLink (via the vendored qrcode.js -
+     * see web/vendor/qrcode.js) and stashes it in qrSvg for x-html to
+     * inject. Type 0 = let the library pick the smallest version that fits
+     * the data; 'M' error correction is the library's usual default and
+     * plenty for a short URL scanned from a phone at close range.
+     * @returns {void}
+     */
+    renderQrCode() {
+      if (!this.shareLink) {
+        this.qrSvg = '';
+        return;
+      }
+      const qr = qrcode(0, 'M');
+      qr.addData(this.shareLink);
+      qr.make();
+      this.qrSvg = qr.createSvgTag({ cellSize: 5, margin: 0 });
     },
 
     /** @returns {void} */
@@ -325,8 +458,54 @@ document.addEventListener('alpine:init', () => {
      */
     cardClass(card) {
       let cls = `uno-card--${card.color}`;
-      if (!this.yourTurn || !this.isPlayable(card)) cls += ' uno-card--disabled';
+      if (!this.yourTurn || this.waitingForReconnect() || !this.isPlayable(card)) cls += ' uno-card--disabled';
       return cls;
+    },
+
+    /**
+     * A single per-card trailing gap (margin-right, in px - often negative,
+     * i.e. an overlap) applied uniformly to every hand card, so the
+     * browser's own `flex-wrap` does the actual row-breaking instead of
+     * manually slicing the hand into row arrays. It's sized so that
+     * exactly `perRow` cards - the equal-ish target row size for the
+     * current hand length and viewport width - fit the available width,
+     * using only as much overlap as that requires (often none) and never
+     * more than 30% of a card's width. Applying it as trailing margin
+     * (not leading) matters: a uniform *leading* margin would also yank
+     * the first card of every wrapped row and the very first card of the
+     * hand leftward; a trailing margin only ever pulls the *next* card on
+     * the same line closer, so it's a no-op at both the hand's start and
+     * every row-wrap boundary - exactly the "no gap needed there" cases.
+     * @returns {number}
+     */
+    handCardGap() {
+      const n = this.hand.length;
+      if (n <= 1) return 0;
+      const available = this.handRowWidth();
+      const maxPerRow = this.maxCardsPerRow();
+      const rows = Math.max(1, Math.ceil(n / maxPerRow));
+      const perRow = Math.min(n, Math.ceil(n / rows));
+      if (perRow <= 1) return 0;
+      const natural = perRow * CARD_WIDTH + (perRow - 1) * CARD_GAP;
+      if (natural <= available) return CARD_GAP;
+      const advance = Math.max((available - CARD_WIDTH) / (perRow - 1), CARD_WIDTH * (1 - MAX_CARD_OVERLAP));
+      return advance - CARD_WIDTH;
+    },
+
+    /**
+     * How many cards fit in one row before needing more than 30% overlap
+     * to do so, given the current viewport width.
+     * @returns {number}
+     */
+    maxCardsPerRow() {
+      const available = this.handRowWidth();
+      const minAdvance = CARD_WIDTH * (1 - MAX_CARD_OVERLAP);
+      return Math.max(1, Math.floor(1 + (available - CARD_WIDTH) / minAdvance));
+    },
+
+    /** @returns {number} usable width for a row of hand cards, in px */
+    handRowWidth() {
+      return Math.max(this.viewportWidth - HAND_SIDE_PADDING, CARD_WIDTH);
     },
 
     /**
@@ -337,7 +516,7 @@ document.addEventListener('alpine:init', () => {
      * @returns {void}
      */
     playCard(card) {
-      if (!this.yourTurn || !this.isPlayable(card)) return;
+      if (!this.yourTurn || this.waitingForReconnect() || !this.isPlayable(card)) return;
       if (card.color === 'wild') {
         this.pendingWildCard = card;
         return;
@@ -372,7 +551,7 @@ document.addEventListener('alpine:init', () => {
 
     /** @returns {void} */
     drawCard() {
-      if (!this.ws || !this.yourTurn || this.yourDrawnCard) return;
+      if (!this.ws || !this.yourTurn || this.yourDrawnCard || this.waitingForReconnect()) return;
       this.ws.send(JSON.stringify({ type: 'draw' }));
     },
 
@@ -395,6 +574,16 @@ document.addEventListener('alpine:init', () => {
     keepDrawnCard() {
       if (!this.ws) return;
       this.ws.send(JSON.stringify({ type: 'pass' }));
+    },
+
+    /**
+     * True once fewer than two players in the game are still connected -
+     * the server freezes the turn in this state rather than ending the
+     * round, so the client mirrors that by blocking actions too.
+     * @returns {boolean}
+     */
+    waitingForReconnect() {
+      return this.gamePlayers.filter(p => p.connected).length < 2;
     },
 
     /**

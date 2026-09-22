@@ -24,6 +24,8 @@
       <p x-text="reconnectAttempts > 0 ? 'Reconnecting…' : 'Connecting…'"></p>
     </div>
 
+    <div class="toast" x-show="justResumed" x-cloak x-transition:enter.duration.200ms>Reconnected</div>
+
     <!-- screen 1: ask for a name -->
     <section class="screen" x-show="screen === 'name'" x-cloak>
       <div class="card">
@@ -71,7 +73,8 @@
           <input type="text" readonly :value="shareLink" @click="$event.target.select()">
           <button class="btn" @click="copyLink()" x-text="copied ? 'Copied!' : 'Copy link'"></button>
         </div>
-        <p class="hint">Send that link to friends so they can join.</p>
+        <div class="qr-code" x-html="qrSvg" x-show="qrSvg"></div>
+        <p class="hint">Send that link to friends, or have them scan the code, so they can join.</p>
 
         <h2>Players (<span x-text="players.length"></span>)</h2>
         <ul class="players">
@@ -80,6 +83,7 @@
               <span x-text="p.name"></span>
               <span class="badge" x-show="p.isHost">host</span>
               <span class="you" x-show="p.id === selfId">(you)</span>
+              <span class="disconnected-badge" x-show="!p.connected">disconnected</span>
             </li>
           </template>
         </ul>
@@ -101,8 +105,8 @@
 
         <header class="game-header">
           <span class="room-chip" x-text="`Room ${roomId}`"></span>
-          <p class="turn-banner" :class="{ 'turn-banner--you': yourTurn }"
-             x-text="yourTurn ? 'Your turn!' : `Waiting for ${gamePlayers.find(p => p.id === currentPlayerId)?.name || '…'}…`"></p>
+          <p class="turn-banner" :class="{ 'turn-banner--you': yourTurn && !waitingForReconnect() }"
+             x-text="waitingForReconnect() ? 'Game paused - waiting for players to reconnect…' : (yourTurn ? 'Your turn!' : `Waiting for ${gamePlayers.find(p => p.id === currentPlayerId)?.name || '…'}…`)"></p>
         </header>
 
         <ul class="opponents">
@@ -116,6 +120,7 @@
               </span>
               <span class="opponents__count" x-text="p.handCount"></span>
               <span class="opponents__uno" x-show="p.handCount === 1 && p.unoCalled">UNO!</span>
+              <span class="opponents__disconnected" x-show="!p.connected">reconnecting…</span>
               <button class="opponents__catch" x-show="isCatchable(p)" @click="catchUno(p.id)">Catch!</button>
             </li>
           </template>
@@ -123,7 +128,7 @@
 
         <div class="table-center">
           <div class="pile-row">
-            <button class="pile pile--deck" @click="drawCard()" :disabled="!yourTurn || yourDrawnCard"
+            <button class="pile pile--deck" @click="drawCard()" :disabled="!yourTurn || yourDrawnCard || waitingForReconnect()"
                     title="Draw a card">
               <span class="card-stack">
                 <span class="card-stack__layer card-stack__layer--3"></span>
@@ -158,10 +163,10 @@
       </div>
 
       <div class="hand-tray">
-        <div class="hand">
-          <template x-for="(c, i) in hand" :key="c.id">
+        <div class="hand" :style="{ '--card-gap': handCardGap() + 'px' }">
+          <template x-for="c in hand" :key="c.id">
             <button class="uno-card" :class="cardClass(c)"
-                    :style="{ '--i': i - (hand.length - 1) / 2, '--n': hand.length, '--raise': (yourTurn && isPlayable(c)) ? 1 : 0 }"
+                    :style="{ '--raise': (yourTurn && !waitingForReconnect() && isPlayable(c)) ? 1 : 0 }"
                     @click="playCard(c)" :title="cardLabel(c)"
                     x-transition:enter.scale.80.duration.250ms>
               <span x-text="cardGlyph(c)"></span>
@@ -209,6 +214,7 @@
        microtask queued the instant its own deferred script runs, which
        is before the *next* deferred script gets a turn - so our
        alpine:init listener has to already be registered by then. -->
+  <script src="/vendor/qrcode.js" defer></script>
   <script src="/js/app.js" defer></script>
   <script src="/vendor/alpine.min.js" defer></script>
 </body>

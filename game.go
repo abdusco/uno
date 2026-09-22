@@ -326,6 +326,17 @@ func (g *gameState) passTurn(playerID string) (ok bool, errMsg string) {
 	return true, ""
 }
 
+// autoSkip moves the turn to the next seat with no other effect - no card
+// draw, no hand mutation - clearing any pending draw decision along the
+// way. Used by room.go to step past a player who's currently disconnected,
+// so the game doesn't stall waiting for someone who dropped mid-turn; their
+// hand is untouched and they resume normally whenever they reconnect.
+func (g *gameState) autoSkip() {
+	g.drawPending = false
+	g.lastDrawnCard = nil
+	g.turnIdx = mod(g.turnIdx+g.direction, len(g.order))
+}
+
 // callUno lets a player declare UNO once they're down to one or two cards
 // (the latter covers calling right before playing their second-to-last
 // card, which is how it's usually done at the table).
