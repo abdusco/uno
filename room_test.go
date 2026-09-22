@@ -139,6 +139,25 @@ func TestReconnect(t *testing.T) {
 	})
 }
 
+func TestRoomPlayerLimit(t *testing.T) {
+	r := newRoom("FULL1", "Full Room")
+	var first *joinResult
+	for i := 0; i < maxRoomPlayers; i++ {
+		joined := joinRoom(t, r, "Player")
+		if i == 0 {
+			first = joined
+		}
+	}
+
+	resultCh := make(chan *joinResult, 1)
+	r.joinCh <- &joinReq{name: "One too many", result: resultCh}
+	assert.Equal(t, "this room is full", (<-resultCh).err)
+
+	leave(t, r, first)
+	resumed := reconnectRoom(t, r, first.player.token)
+	assert.True(t, resumed.reconnected, "a reserved seat must remain reconnectable when the room is full")
+}
+
 func TestAutoSkipDisconnected(t *testing.T) {
 	t.Run("disconnecting the current player advances the turn immediately", func(t *testing.T) {
 		r := newRoom("TEST9", "Test Room")

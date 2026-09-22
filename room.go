@@ -12,6 +12,11 @@ import (
 // roomCodeAlphabet excludes visually ambiguous characters (0/O, 1/I/L).
 const roomCodeAlphabet = "ABCDEFGHJKMNPQRSTUVWXYZ23456789"
 
+// maxRoomPlayers caps persistent seats, not just currently connected players.
+// Disconnected players retain their seat so their reconnect token can restore
+// the same hand and identity without letting a room grow beyond this limit.
+const maxRoomPlayers = 8
+
 func newRoomCode() string {
 	b := make([]byte, 5)
 	_, _ = rand.Read(b)
@@ -245,6 +250,10 @@ func (r *room) handleJoin(req *joinReq) {
 
 	if r.status == "playing" {
 		req.result <- &joinResult{err: "this game has already started"}
+		return
+	}
+	if len(r.players) >= maxRoomPlayers {
+		req.result <- &joinResult{err: "this room is full"}
 		return
 	}
 	// If nobody currently connected is host - a brand new room, or one
