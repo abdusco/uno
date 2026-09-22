@@ -131,18 +131,50 @@ func startGame(order []string, nameOf func(string) string) *gameState {
 	for _, pid := range g.order {
 		g.hands[pid] = g.draw(7)
 	}
-	// Flip the first card. If it happens to be a wild, just assign it a
-	// random color rather than re-drawing - keeps startup simple and it's
-	// a one-in-27 edge case players won't notice.
-	top := g.draw(1)[0]
+	// A Wild Draw Four cannot start the discard pile. Return it to the
+	// bottom of the draw pile and reveal another card.
+	top := g.drawOpeningCard()
 	g.discard = []Card{top}
 	if top.Color == "wild" {
 		g.topColor = colors[int(randUint32())%len(colors)]
 	} else {
 		g.topColor = top.Color
 	}
-	g.addLog(fmt.Sprintf("Game started - %s goes first", nameOf(g.currentPlayer())))
+	g.applyOpeningCard(top, nameOf)
 	return g
+}
+
+func (g *gameState) drawOpeningCard() Card {
+	for {
+		top := g.draw(1)[0]
+		if top.Value != "wild4" {
+			return top
+		}
+		// draw removes from the end, so index zero is the bottom. Placing the
+		// rejected card there also guarantees the replacement is different.
+		g.deck = append([]Card{top}, g.deck...)
+	}
+}
+
+func (g *gameState) applyOpeningCard(top Card, nameOf func(string) string) {
+	opening := fmt.Sprintf("Game started with %s", cardLabel(top))
+	switch top.Value {
+	case "skip":
+		skipped := g.currentPlayer()
+		g.turnIdx = mod(g.turnIdx+g.direction, len(g.order))
+		opening += fmt.Sprintf(" \u2014 %s is skipped", nameOf(skipped))
+	case "reverse":
+		g.direction = -1
+		g.turnIdx = mod(g.turnIdx+g.direction, len(g.order))
+		opening += " \u2014 direction reversed"
+	case "draw2":
+		victim := g.currentPlayer()
+		g.hands[victim] = append(g.hands[victim], g.draw(2)...)
+		g.unoCalled[victim] = false
+		g.turnIdx = mod(g.turnIdx+g.direction, len(g.order))
+		opening += fmt.Sprintf(" \u2014 %s draws 2 and is skipped", nameOf(victim))
+	}
+	g.addLog(fmt.Sprintf("%s \u2014 %s goes first", opening, nameOf(g.currentPlayer())))
 }
 
 // draw takes n cards off the deck, reshuffling the discard pile (minus its

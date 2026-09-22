@@ -93,6 +93,56 @@ func TestIsPlayable(t *testing.T) {
 	}
 }
 
+func TestOpeningCard(t *testing.T) {
+	newOpeningGame := func(top Card) *gameState {
+		return &gameState{
+			deck:      []Card{{ID: "draw-1"}, {ID: "draw-2"}},
+			discard:   []Card{top},
+			hands:     map[string][]Card{"p1": {{ID: "p1"}}, "p2": {{ID: "p2"}}, "p3": {{ID: "p3"}}},
+			order:     []string{"p1", "p2", "p3"},
+			direction: 1,
+			topColor:  top.Color,
+			unoCalled: make(map[string]bool),
+		}
+	}
+
+	t.Run("number leaves the first player unchanged", func(t *testing.T) {
+		g := newOpeningGame(Card{ID: "top", Color: "red", Value: "7"})
+		g.applyOpeningCard(g.discard[0], nameOfStub)
+		assert.Equal(t, "p1", g.currentPlayer())
+		assert.Equal(t, 1, g.direction)
+	})
+
+	t.Run("skip bypasses the first player", func(t *testing.T) {
+		g := newOpeningGame(Card{ID: "top", Color: "red", Value: "skip"})
+		g.applyOpeningCard(g.discard[0], nameOfStub)
+		assert.Equal(t, "p2", g.currentPlayer())
+	})
+
+	t.Run("reverse changes direction and starts with the previous seat", func(t *testing.T) {
+		g := newOpeningGame(Card{ID: "top", Color: "red", Value: "reverse"})
+		g.applyOpeningCard(g.discard[0], nameOfStub)
+		assert.Equal(t, -1, g.direction)
+		assert.Equal(t, "p3", g.currentPlayer())
+	})
+
+	t.Run("draw two penalizes and skips the first player", func(t *testing.T) {
+		g := newOpeningGame(Card{ID: "top", Color: "red", Value: "draw2"})
+		g.applyOpeningCard(g.discard[0], nameOfStub)
+		assert.Len(t, g.hands["p1"], 3)
+		assert.Equal(t, "p2", g.currentPlayer())
+	})
+
+	t.Run("wild draw four is returned and replaced", func(t *testing.T) {
+		wild4 := Card{ID: "wild4", Color: "wild", Value: "wild4"}
+		replacement := Card{ID: "replacement", Color: "green", Value: "4"}
+		g := &gameState{deck: []Card{replacement, wild4}}
+
+		assert.Equal(t, replacement, g.drawOpeningCard())
+		assert.Equal(t, []Card{wild4}, g.deck)
+	})
+}
+
 // newTestGame builds a minimal 3-player gameState with a known hand for
 // "p1" so playCard scenarios are deterministic.
 func newTestGame(p1Hand []Card) *gameState {
