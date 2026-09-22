@@ -151,10 +151,17 @@ func handleWS(c echo.Context, reg *registry) error {
 	}
 
 	joinResultCh := make(chan *joinResult, 1)
-	rm.joinCh <- &joinReq{
+	join := &joinReq{
 		name: first.Name, asHost: first.Create, token: first.Token,
 		kick:   func() { closeOnce.Do(func() { conn.CloseNow() }) },
 		result: joinResultCh,
+	}
+	select {
+	case rm.joinCh <- join:
+	case <-rm.doneCh:
+		_ = wsjson.Write(ctx, conn, outMsg{Type: "error", Message: "room not found"})
+		closeConn(websocket.StatusNormalClosure, "room not found")
+		return nil
 	}
 	jr := <-joinResultCh
 	if jr.err != "" {
@@ -189,7 +196,11 @@ func handleWS(c echo.Context, reg *registry) error {
 		if err != nil {
 			break
 		}
-		rm.actionCh <- roomAction{playerID: p.id, msg: m}
+		select {
+		case rm.actionCh <- roomAction{playerID: p.id, msg: m}:
+		case <-rm.doneCh:
+			return nil
+		}
 	}
 
 	// Tell the room this connection is gone. This must happen before
@@ -200,7 +211,11 @@ func handleWS(c echo.Context, reg *registry) error {
 	// connGen scopes the signal to this specific connection, so if a
 	// reconnect has already superseded it, the room ignores it instead of
 	// tearing down the session that took over.
-	rm.leaveCh <- leaveReq{playerID: p.id, connGen: jr.connGen}
+	select {
+	case rm.leaveCh <- leaveReq{playerID: p.id, connGen: jr.connGen}:
+	case <-rm.doneCh:
+		return nil
+	}
 	<-done
 	return nil
 }

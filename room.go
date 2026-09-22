@@ -17,6 +17,10 @@ const roomCodeAlphabet = "ABCDEFGHJKMNPQRSTUVWXYZ23456789"
 // the same hand and identity without letting a room grow beyond this limit.
 const maxRoomPlayers = 8
 
+// Empty rooms remain available briefly so every player can reconnect after a
+// network outage, but they must not occupy the registry or a goroutine forever.
+const roomIdleTTL = time.Hour
+
 func newRoomCode() string {
 	b := make([]byte, 5)
 	_, _ = rand.Read(b)
@@ -126,13 +130,15 @@ type room struct {
 	joinCh   chan *joinReq
 	leaveCh  chan leaveReq
 	actionCh chan roomAction
+	doneCh   chan struct{}
 	// syncCh is test-only: closing the channel it's handed proves every
 	// message sent to the room before this one has been fully processed,
 	// not merely received (channel sends unblock the instant the select
 	// statement receives them, before the corresponding handler returns).
 	syncCh chan chan struct{}
 
-	createdAt time.Time
+	idleTTL  time.Duration
+	onExpire func(*room)
 }
 
 type joinReq struct {
@@ -169,34 +175,85 @@ type roomAction struct {
 }
 
 func newRoom(id, name string) *room {
+	return newRoomWithExpiry(id, name, roomIdleTTL, nil)
+}
+
+func newRoomWithExpiry(id, name string, idleTTL time.Duration, onExpire func(*room)) *room {
 	r := &room{
-		id:        id,
-		name:      name,
-		status:    "lobby",
-		players:   make(map[string]*player),
-		joinCh:    make(chan *joinReq),
-		leaveCh:   make(chan leaveReq),
-		actionCh:  make(chan roomAction),
-		syncCh:    make(chan chan struct{}),
-		createdAt: time.Now(),
+		id:       id,
+		name:     name,
+		status:   "lobby",
+		players:  make(map[string]*player),
+		joinCh:   make(chan *joinReq),
+		leaveCh:  make(chan leaveReq),
+		actionCh: make(chan roomAction),
+		doneCh:   make(chan struct{}),
+		syncCh:   make(chan chan struct{}),
+		idleTTL:  idleTTL,
+		onExpire: onExpire,
 	}
 	go r.run()
 	return r
 }
 
 func (r *room) run() {
+	timer := time.NewTimer(r.idleTTL)
+	expiry := timer.C
+	expiryArmed := true
+	defer func() {
+		timer.Stop()
+		close(r.doneCh)
+	}()
+	refreshExpiry := func() {
+		empty := r.connectedPlayers() == 0
+		if empty == expiryArmed {
+			return
+		}
+		if empty {
+			timer.Reset(r.idleTTL)
+			expiry = timer.C
+			expiryArmed = true
+			return
+		}
+		if !timer.Stop() {
+			select {
+			case <-timer.C:
+			default:
+			}
+		}
+		expiry = nil
+		expiryArmed = false
+	}
+
 	for {
 		select {
 		case req := <-r.joinCh:
 			r.handleJoin(req)
+			refreshExpiry()
 		case done := <-r.syncCh:
 			close(done)
 		case lr := <-r.leaveCh:
 			r.handleLeave(lr)
+			refreshExpiry()
 		case act := <-r.actionCh:
 			r.handleAction(act)
+		case <-expiry:
+			if r.onExpire != nil {
+				r.onExpire(r)
+			}
+			return
 		}
 	}
+}
+
+func (r *room) connectedPlayers() int {
+	n := 0
+	for _, p := range r.players {
+		if p.connected {
+			n++
+		}
+	}
+	return n
 }
 
 func (r *room) handleJoin(req *joinReq) {
@@ -651,12 +708,13 @@ func (r *room) broadcastAll(m outMsg) {
 // --- room registry -------------------------------------------------------
 
 type registry struct {
-	mu    sync.Mutex
-	rooms map[string]*room
+	mu      sync.Mutex
+	rooms   map[string]*room
+	idleTTL time.Duration
 }
 
 func newRegistry() *registry {
-	return &registry{rooms: make(map[string]*room)}
+	return &registry{rooms: make(map[string]*room), idleTTL: roomIdleTTL}
 }
 
 func (reg *registry) create(name string) *room {
@@ -669,9 +727,17 @@ func (reg *registry) create(name string) *room {
 			break
 		}
 	}
-	r := newRoom(code, name)
+	r := newRoomWithExpiry(code, name, reg.idleTTL, reg.remove)
 	reg.rooms[code] = r
 	return r
+}
+
+func (reg *registry) remove(r *room) {
+	reg.mu.Lock()
+	defer reg.mu.Unlock()
+	if reg.rooms[r.id] == r {
+		delete(reg.rooms, r.id)
+	}
 }
 
 func (reg *registry) get(code string) *room {

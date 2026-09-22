@@ -2,6 +2,7 @@ package main
 
 import (
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -195,6 +196,27 @@ func TestRoomPlayerLimit(t *testing.T) {
 	leave(t, r, first)
 	resumed := reconnectRoom(t, r, first.player.token)
 	assert.True(t, resumed.reconnected, "a reserved seat must remain reconnectable when the room is full")
+}
+
+func TestRegistryExpiresEmptyRooms(t *testing.T) {
+	reg := newRegistry()
+	reg.idleTTL = 20 * time.Millisecond
+	r := reg.create("Short lived")
+	joined := joinRoom(t, r, "Alice")
+
+	select {
+	case <-r.doneCh:
+		t.Fatal("room expired while a player was connected")
+	case <-time.After(3 * reg.idleTTL):
+	}
+
+	leave(t, r, joined)
+	select {
+	case <-r.doneCh:
+	case <-time.After(time.Second):
+		t.Fatal("empty room did not expire")
+	}
+	assert.Nil(t, reg.get(r.id), "expired room must be removed from the registry")
 }
 
 func TestAutoSkipDisconnected(t *testing.T) {
