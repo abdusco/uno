@@ -129,7 +129,7 @@ func handleWS(c echo.Context, reg *registry) error {
 		return nil
 	}
 	if first.Type != "hello" || first.Name == "" {
-		_ = wsjson.Write(ctx, conn, outMsg{Type: "error", Message: "expected hello with a name"})
+		writeClientError(ctx, conn, ErrProtocolViolation{Message: "expected hello with a name"})
 		closeConn(websocket.StatusPolicyViolation, "bad hello")
 		return nil
 	}
@@ -144,7 +144,7 @@ func handleWS(c echo.Context, reg *registry) error {
 	} else {
 		rm = reg.get(first.Room)
 		if rm == nil {
-			_ = wsjson.Write(ctx, conn, outMsg{Type: "error", Message: "room not found"})
+			writeClientError(ctx, conn, ErrRoomNotFound{})
 			closeConn(websocket.StatusNormalClosure, "room not found")
 			return nil
 		}
@@ -159,14 +159,14 @@ func handleWS(c echo.Context, reg *registry) error {
 	select {
 	case rm.joinCh <- join:
 	case <-rm.doneCh:
-		_ = wsjson.Write(ctx, conn, outMsg{Type: "error", Message: "room not found"})
+		writeClientError(ctx, conn, ErrRoomNotFound{})
 		closeConn(websocket.StatusNormalClosure, "room not found")
 		return nil
 	}
 	jr := <-joinResultCh
-	if jr.err != "" {
-		_ = wsjson.Write(ctx, conn, outMsg{Type: "error", Message: jr.err})
-		closeConn(websocket.StatusNormalClosure, jr.err)
+	if jr.err != nil {
+		writeClientError(ctx, conn, jr.err)
+		closeConn(websocket.StatusNormalClosure, jr.err.Error())
 		return nil
 	}
 	p := jr.player
@@ -218,4 +218,9 @@ func handleWS(c echo.Context, reg *registry) error {
 	}
 	<-done
 	return nil
+}
+
+func writeClientError(ctx context.Context, conn *websocket.Conn, err error) {
+	code, message := clientErrorDetails(err)
+	_ = wsjson.Write(ctx, conn, outMsg{Type: "error", Code: code, Message: message})
 }

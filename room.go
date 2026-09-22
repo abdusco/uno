@@ -36,6 +36,7 @@ func newRoomCode() string {
 // omitted from the JSON via omitempty.
 type outMsg struct {
 	Type     string       `json:"type"`
+	Code     string       `json:"code,omitempty"`
 	RoomID   string       `json:"roomId,omitempty"`
 	RoomName string       `json:"roomName,omitempty"`
 	Self     *playerView  `json:"self,omitempty"`
@@ -158,7 +159,7 @@ type joinResult struct {
 	sendCh      chan outMsg
 	connGen     int
 	reconnected bool
-	err         string
+	err         error
 }
 
 // leaveReq reports that one specific connection ended. connGen scopes it to
@@ -307,11 +308,11 @@ func (r *room) handleJoin(req *joinReq) {
 	}
 
 	if r.status == "playing" {
-		req.result <- &joinResult{err: "this game has already started"}
+		req.result <- &joinResult{err: ErrGameInProgress{}}
 		return
 	}
 	if len(r.players) >= maxRoomPlayers {
-		req.result <- &joinResult{err: "this room is full"}
+		req.result <- &joinResult{err: ErrRoomFull{}}
 		return
 	}
 	// If nobody currently connected is host - a brand new room, or one
@@ -459,11 +460,11 @@ func (r *room) handleAction(act roomAction) {
 	switch act.msg.Type {
 	case "start":
 		if !p.isHost {
-			p.send <- outMsg{Type: "error", Message: "only the host can start the game"}
+			r.sendError(p, ErrIllegalMove{Message: "only the host can start the game"})
 			return
 		}
 		if len(r.players) < 2 {
-			p.send <- outMsg{Type: "error", Message: "need at least 2 players to start"}
+			r.sendError(p, ErrIllegalMove{Message: "need at least 2 players to start"})
 			return
 		}
 		if r.status == "playing" {
@@ -476,38 +477,40 @@ func (r *room) handleAction(act roomAction) {
 
 	case "play":
 		if r.status != "playing" || r.game == nil {
-			p.send <- outMsg{Type: "error", Message: "the game hasn't started"}
+			r.sendError(p, ErrIllegalMove{Message: "the game hasn't started"})
 			return
 		}
 		if r.connectedInGame() < 2 {
-			p.send <- outMsg{Type: "error", Message: "waiting for other players to reconnect"}
+			r.sendError(p, ErrIllegalMove{Message: "waiting for other players to reconnect"})
 			return
 		}
-		ok, errMsg := r.game.playCard(p.id, act.msg.CardID, act.msg.Color, r.nameOf)
-		if !ok {
-			p.send <- outMsg{Type: "error", Message: errMsg}
+		if err := r.game.playCard(p.id, act.msg.CardID, act.msg.Color, r.nameOf); err != nil {
+			r.sendError(p, err)
 			return
 		}
 		r.afterTurnAdvance()
 
 	case "draw":
 		if r.status != "playing" || r.game == nil {
-			p.send <- outMsg{Type: "error", Message: "the game hasn't started"}
+			r.sendError(p, ErrIllegalMove{Message: "the game hasn't started"})
 			return
 		}
 		if r.connectedInGame() < 2 {
-			p.send <- outMsg{Type: "error", Message: "waiting for other players to reconnect"}
+			r.sendError(p, ErrIllegalMove{Message: "waiting for other players to reconnect"})
 			return
 		}
-		drawn, ok, errMsg := r.game.drawCard(p.id, r.nameOf)
-		if !ok {
-			p.send <- outMsg{Type: "error", Message: errMsg}
+		drawn, err := r.game.drawCard(p.id, r.nameOf)
+		if err != nil {
+			r.sendError(p, err)
 			return
 		}
 		// Nothing to decide if the drawn card can't be played anyway - end
 		// the turn immediately instead of making the player pass manually.
 		if !r.game.isPlayable(drawn) {
-			r.game.passTurn(p.id)
+			if err := r.game.passTurn(p.id); err != nil {
+				r.sendError(p, err)
+				return
+			}
 			r.afterTurnAdvance()
 		} else {
 			r.broadcastState()
@@ -515,40 +518,37 @@ func (r *room) handleAction(act roomAction) {
 
 	case "pass":
 		if r.status != "playing" || r.game == nil {
-			p.send <- outMsg{Type: "error", Message: "the game hasn't started"}
+			r.sendError(p, ErrIllegalMove{Message: "the game hasn't started"})
 			return
 		}
 		if r.connectedInGame() < 2 {
-			p.send <- outMsg{Type: "error", Message: "waiting for other players to reconnect"}
+			r.sendError(p, ErrIllegalMove{Message: "waiting for other players to reconnect"})
 			return
 		}
-		ok, errMsg := r.game.passTurn(p.id)
-		if !ok {
-			p.send <- outMsg{Type: "error", Message: errMsg}
+		if err := r.game.passTurn(p.id); err != nil {
+			r.sendError(p, err)
 			return
 		}
 		r.afterTurnAdvance()
 
 	case "callUno":
 		if r.status != "playing" || r.game == nil {
-			p.send <- outMsg{Type: "error", Message: "the game hasn't started"}
+			r.sendError(p, ErrIllegalMove{Message: "the game hasn't started"})
 			return
 		}
-		ok, errMsg := r.game.callUno(p.id, r.nameOf)
-		if !ok {
-			p.send <- outMsg{Type: "error", Message: errMsg}
+		if err := r.game.callUno(p.id, r.nameOf); err != nil {
+			r.sendError(p, err)
 			return
 		}
 		r.broadcastState()
 
 	case "catchUno":
 		if r.status != "playing" || r.game == nil {
-			p.send <- outMsg{Type: "error", Message: "the game hasn't started"}
+			r.sendError(p, ErrIllegalMove{Message: "the game hasn't started"})
 			return
 		}
-		ok, errMsg := r.game.catchUno(p.id, act.msg.TargetID, r.nameOf)
-		if !ok {
-			p.send <- outMsg{Type: "error", Message: errMsg}
+		if err := r.game.catchUno(p.id, act.msg.TargetID, r.nameOf); err != nil {
+			r.sendError(p, err)
 			return
 		}
 		r.broadcastState()
@@ -556,6 +556,11 @@ func (r *room) handleAction(act roomAction) {
 	default:
 		log.Printf("room %s: unknown action %q from %s", r.id, act.msg.Type, act.playerID)
 	}
+}
+
+func (r *room) sendError(p *player, err error) {
+	code, message := clientErrorDetails(err)
+	p.send <- outMsg{Type: "error", Code: code, Message: message}
 }
 
 // nameOf resolves a player ID to a display name, falling back to something

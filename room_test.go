@@ -1,7 +1,9 @@
 package main
 
 import (
+	"errors"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/stretchr/testify/assert"
@@ -13,7 +15,7 @@ func joinRoom(t *testing.T, r *room, name string) *joinResult {
 	resultCh := make(chan *joinResult, 1)
 	r.joinCh <- &joinReq{name: name, asHost: false, result: resultCh}
 	res := <-resultCh
-	require.Empty(t, res.err)
+	require.NoError(t, res.err)
 	return res
 }
 
@@ -22,7 +24,7 @@ func reconnectRoom(t *testing.T, r *room, token string) *joinResult {
 	resultCh := make(chan *joinResult, 1)
 	r.joinCh <- &joinReq{token: token, result: resultCh}
 	res := <-resultCh
-	require.Empty(t, res.err)
+	require.NoError(t, res.err)
 	return res
 }
 
@@ -159,7 +161,7 @@ func TestReconnect(t *testing.T) {
 		resultCh := make(chan *joinResult, 1)
 		r.joinCh <- &joinReq{name: "Mallory", token: "not-a-real-token", result: resultCh}
 		res := <-resultCh
-		require.Empty(t, res.err)
+		require.NoError(t, res.err)
 		assert.False(t, res.reconnected)
 		assert.Equal(t, "Mallory", res.player.name)
 	})
@@ -191,7 +193,9 @@ func TestRoomPlayerLimit(t *testing.T) {
 
 	resultCh := make(chan *joinResult, 1)
 	r.joinCh <- &joinReq{name: "One too many", result: resultCh}
-	assert.Equal(t, "this room is full", (<-resultCh).err)
+	roomFull, ok := errors.AsType[ErrRoomFull]((<-resultCh).err)
+	assert.True(t, ok)
+	assert.Equal(t, "this room is full", roomFull.Error())
 
 	leave(t, r, first)
 	resumed := reconnectRoom(t, r, first.player.token)
@@ -199,24 +203,30 @@ func TestRoomPlayerLimit(t *testing.T) {
 }
 
 func TestRegistryExpiresEmptyRooms(t *testing.T) {
-	reg := newRegistry()
-	reg.idleTTL = 20 * time.Millisecond
-	r := reg.create("Short lived")
-	joined := joinRoom(t, r, "Alice")
+	synctest.Test(t, func(t *testing.T) {
+		reg := newRegistry()
+		reg.idleTTL = 20 * time.Millisecond
+		r := reg.create("Short lived")
+		joined := joinRoom(t, r, "Alice")
 
-	select {
-	case <-r.doneCh:
-		t.Fatal("room expired while a player was connected")
-	case <-time.After(3 * reg.idleTTL):
-	}
+		time.Sleep(3 * reg.idleTTL)
+		synctest.Wait()
+		select {
+		case <-r.doneCh:
+			t.Fatal("room expired while a player was connected")
+		default:
+		}
 
-	leave(t, r, joined)
-	select {
-	case <-r.doneCh:
-	case <-time.After(time.Second):
-		t.Fatal("empty room did not expire")
-	}
-	assert.Nil(t, reg.get(r.id), "expired room must be removed from the registry")
+		leave(t, r, joined)
+		time.Sleep(reg.idleTTL)
+		synctest.Wait()
+		select {
+		case <-r.doneCh:
+		default:
+			t.Fatal("empty room did not expire")
+		}
+		assert.Nil(t, reg.get(r.id), "expired room must be removed from the registry")
+	})
 }
 
 func TestAutoSkipDisconnected(t *testing.T) {

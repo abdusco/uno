@@ -53,6 +53,7 @@ const HAND_SIDE_PADDING = 24;
  * @property {Player} [self]
  * @property {Player[]} [players]
  * @property {string} [message]
+ * @property {string} [code]
  * @property {Card[]} [hand]
  * @property {Card} [discardTop]
  * @property {string} [topColor]
@@ -400,7 +401,7 @@ document.addEventListener('alpine:init', () => {
           break;
         case 'error':
           this.errorMsg = msg.message || 'Something went wrong.';
-          if (msg.message === 'room not found' && (this.joiningRoom || this.roomId)) this.resetMissingRoom();
+          if (msg.code === 'room_not_found' && (this.joiningRoom || this.roomId)) this.resetMissingRoom();
           break;
       }
     },

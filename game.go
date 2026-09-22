@@ -190,9 +190,9 @@ func (g *gameState) isPlayable(c Card) bool {
 // playCard removes the named card from playerID's hand and applies it.
 // chosenColor is required (and only used) for wild / wild4 cards. nameOf
 // resolves a playerID to a display name, used only for the activity log.
-func (g *gameState) playCard(playerID, cardID, chosenColor string, nameOf func(string) string) (ok bool, errMsg string) {
+func (g *gameState) playCard(playerID, cardID, chosenColor string, nameOf func(string) string) error {
 	if g.currentPlayer() != playerID {
-		return false, "it's not your turn"
+		return ErrIllegalMove{Message: "it's not your turn"}
 	}
 	hand := g.hands[playerID]
 	idx := -1
@@ -203,11 +203,11 @@ func (g *gameState) playCard(playerID, cardID, chosenColor string, nameOf func(s
 		}
 	}
 	if idx == -1 {
-		return false, "you don't have that card"
+		return ErrIllegalMove{Message: "you don't have that card"}
 	}
 	card := hand[idx]
 	if !g.isPlayable(card) {
-		return false, "that card doesn't match the discard pile"
+		return ErrIllegalMove{Message: "that card doesn't match the discard pile"}
 	}
 	g.drawPending = false
 	g.lastDrawnCard = nil
@@ -219,7 +219,7 @@ func (g *gameState) playCard(playerID, cardID, chosenColor string, nameOf func(s
 			}
 		}
 		if !valid {
-			return false, "pick a color for the wild card"
+			return ErrIllegalMove{Message: "pick a color for the wild card"}
 		}
 	}
 	calledBeforePlay := g.unoCalled[playerID]
@@ -283,7 +283,7 @@ func (g *gameState) playCard(playerID, cardID, chosenColor string, nameOf func(s
 	if len(g.hands[playerID]) == 0 {
 		g.unoCalled[playerID] = false
 		g.winnerID = playerID
-		return true, ""
+		return nil
 	}
 	if len(g.hands[playerID]) == 1 {
 		g.unoCalled[playerID] = calledBeforePlay
@@ -295,7 +295,7 @@ func (g *gameState) playCard(playerID, cardID, chosenColor string, nameOf func(s
 	}
 
 	g.turnIdx = mod(g.turnIdx+g.direction*(1+skip), n)
-	return true, ""
+	return nil
 }
 
 // drawCard gives the current player one card. It does not end their turn by
@@ -304,16 +304,16 @@ func (g *gameState) playCard(playerID, cardID, chosenColor string, nameOf func(s
 // immediately or keep it (passTurn ends the turn for the latter case). This
 // is still a deliberate simplification versus real UNO: no forced play, and
 // no draw-stacking on draw-twos/wild-fours.
-func (g *gameState) drawCard(playerID string, nameOf func(string) string) (drawn Card, ok bool, errMsg string) {
+func (g *gameState) drawCard(playerID string, nameOf func(string) string) (Card, error) {
 	if g.currentPlayer() != playerID {
-		return Card{}, false, "it's not your turn"
+		return Card{}, ErrIllegalMove{Message: "it's not your turn"}
 	}
 	if g.drawPending {
-		return Card{}, false, "you already drew a card - play it or keep it"
+		return Card{}, ErrIllegalMove{Message: "you already drew a card - play it or keep it"}
 	}
 	cards := g.draw(1)
 	if len(cards) == 0 {
-		return Card{}, false, "no cards left to draw"
+		return Card{}, ErrIllegalMove{Message: "no cards left to draw"}
 	}
 	card := cards[0]
 	g.closeUnoCatchWindow()
@@ -322,22 +322,22 @@ func (g *gameState) drawCard(playerID string, nameOf func(string) string) (drawn
 	g.drawPending = true
 	g.lastDrawnCard = &card
 	g.addLog(fmt.Sprintf("%s drew a card", nameOf(playerID)))
-	return card, true, ""
+	return card, nil
 }
 
 // passTurn ends the current player's turn after they've drawn a card and
 // decided not to play it (or it wasn't playable to begin with).
-func (g *gameState) passTurn(playerID string) (ok bool, errMsg string) {
+func (g *gameState) passTurn(playerID string) error {
 	if g.currentPlayer() != playerID {
-		return false, "it's not your turn"
+		return ErrIllegalMove{Message: "it's not your turn"}
 	}
 	if !g.drawPending {
-		return false, "you haven't drawn a card yet"
+		return ErrIllegalMove{Message: "you haven't drawn a card yet"}
 	}
 	g.drawPending = false
 	g.lastDrawnCard = nil
 	g.turnIdx = mod(g.turnIdx+g.direction, len(g.order))
-	return true, ""
+	return nil
 }
 
 // autoSkip moves the turn to the next seat with no other effect - no card
@@ -356,49 +356,49 @@ func (g *gameState) autoSkip() {
 // before playing their penultimate card. A player who has just reached one
 // card can also call during the catch window, until another card action wins
 // the race and closes that window.
-func (g *gameState) callUno(playerID string, nameOf func(string) string) (ok bool, errMsg string) {
+func (g *gameState) callUno(playerID string, nameOf func(string) string) error {
 	hand, ok := g.hands[playerID]
 	if !ok {
-		return false, "you're not in this game"
+		return ErrIllegalMove{Message: "you're not in this game"}
 	}
 	if g.unoCalled[playerID] {
-		return false, "you already called UNO"
+		return ErrIllegalMove{Message: "you already called UNO"}
 	}
 	if len(hand) == 2 && g.currentPlayer() != playerID {
-		return false, "call UNO when you play your second-to-last card"
+		return ErrIllegalMove{Message: "call UNO when you play your second-to-last card"}
 	}
 	if len(hand) != 2 && !(len(hand) == 1 && g.unoCatchableID == playerID) {
-		return false, "you don't need to call UNO yet"
+		return ErrIllegalMove{Message: "you don't need to call UNO yet"}
 	}
 	g.unoCalled[playerID] = true
 	if g.unoCatchableID == playerID {
 		g.unoCatchableID = ""
 	}
 	g.addLog(fmt.Sprintf("%s called UNO!", nameOf(playerID)))
-	return true, ""
+	return nil
 }
 
 // catchUno lets another player call out the one player whose catch window is
 // currently open, penalizing them two cards.
-func (g *gameState) catchUno(catcherID, targetID string, nameOf func(string) string) (ok bool, errMsg string) {
+func (g *gameState) catchUno(catcherID, targetID string, nameOf func(string) string) error {
 	hand, ok := g.hands[targetID]
 	if !ok {
-		return false, "that player isn't in this game"
+		return ErrIllegalMove{Message: "that player isn't in this game"}
 	}
 	if catcherID == targetID {
-		return false, "you can't catch yourself"
+		return ErrIllegalMove{Message: "you can't catch yourself"}
 	}
 	if len(hand) != 1 || g.unoCatchableID != targetID {
-		return false, "that player doesn't need to call UNO"
+		return ErrIllegalMove{Message: "that player doesn't need to call UNO"}
 	}
 	if g.unoCalled[targetID] {
-		return false, "they already called UNO"
+		return ErrIllegalMove{Message: "they already called UNO"}
 	}
 	g.hands[targetID] = append(g.hands[targetID], g.draw(2)...)
 	g.unoCalled[targetID] = false
 	g.unoCatchableID = ""
 	g.addLog(fmt.Sprintf("%s got caught without calling UNO - draws 2", nameOf(targetID)))
-	return true, ""
+	return nil
 }
 
 func (g *gameState) closeUnoCatchWindow() {
