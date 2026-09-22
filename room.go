@@ -42,6 +42,10 @@ type outMsg struct {
 	YourTurn        bool             `json:"yourTurn,omitempty"`
 	DeckCount       int              `json:"deckCount,omitempty"`
 	Log             []string         `json:"log,omitempty"`
+	// YourDrawnCard is set only for the player whose draw decision is
+	// pending (see gameState.drawPending) - the client shows a "play it or
+	// keep it" prompt for exactly this card.
+	YourDrawnCard *Card `json:"yourDrawnCard,omitempty"`
 
 	// type "gameOver"
 	WinnerID   string `json:"winnerId,omitempty"`
@@ -50,9 +54,10 @@ type outMsg struct {
 
 // inMsg is anything a client sends to the server.
 type inMsg struct {
-	Type   string `json:"type"`
-	CardID string `json:"cardId,omitempty"`
-	Color  string `json:"color,omitempty"`
+	Type     string `json:"type"`
+	CardID   string `json:"cardId,omitempty"`
+	Color    string `json:"color,omitempty"`
+	TargetID string `json:"targetId,omitempty"` // "catchUno"
 }
 
 type playerView struct {
@@ -67,6 +72,7 @@ type gamePlayerView struct {
 	Name          string `json:"name"`
 	HandCount     int    `json:"handCount"`
 	IsCurrentTurn bool   `json:"isCurrentTurn"`
+	UnoCalled     bool   `json:"unoCalled"`
 }
 
 // player is a single connected (or disconnected-but-not-yet-reaped) client.
@@ -98,7 +104,7 @@ type room struct {
 }
 
 type joinReq struct {
-	name  string
+	name   string
 	asHost bool
 	result chan *joinResult
 }
@@ -246,7 +252,48 @@ func (r *room) handleAction(act roomAction) {
 			p.send <- outMsg{Type: "error", Message: "the game hasn't started"}
 			return
 		}
-		ok, errMsg := r.game.drawCard(p.id, r.nameOf)
+		drawn, ok, errMsg := r.game.drawCard(p.id, r.nameOf)
+		if !ok {
+			p.send <- outMsg{Type: "error", Message: errMsg}
+			return
+		}
+		// Nothing to decide if the drawn card can't be played anyway - end
+		// the turn immediately instead of making the player pass manually.
+		if !r.game.isPlayable(drawn) {
+			r.game.passTurn(p.id)
+		}
+		r.broadcastState()
+
+	case "pass":
+		if r.status != "playing" || r.game == nil {
+			p.send <- outMsg{Type: "error", Message: "the game hasn't started"}
+			return
+		}
+		ok, errMsg := r.game.passTurn(p.id)
+		if !ok {
+			p.send <- outMsg{Type: "error", Message: errMsg}
+			return
+		}
+		r.broadcastState()
+
+	case "callUno":
+		if r.status != "playing" || r.game == nil {
+			p.send <- outMsg{Type: "error", Message: "the game hasn't started"}
+			return
+		}
+		ok, errMsg := r.game.callUno(p.id, r.nameOf)
+		if !ok {
+			p.send <- outMsg{Type: "error", Message: errMsg}
+			return
+		}
+		r.broadcastState()
+
+	case "catchUno":
+		if r.status != "playing" || r.game == nil {
+			p.send <- outMsg{Type: "error", Message: "the game hasn't started"}
+			return
+		}
+		ok, errMsg := r.game.catchUno(act.msg.TargetID, r.nameOf)
 		if !ok {
 			p.send <- outMsg{Type: "error", Message: errMsg}
 			return
@@ -280,6 +327,7 @@ func (r *room) broadcastState() {
 			Name:          r.nameOf(id),
 			HandCount:     len(g.hands[id]),
 			IsCurrentTurn: id == g.currentPlayer(),
+			UnoCalled:     g.unoCalled[id],
 		})
 	}
 	top := g.discard[len(g.discard)-1]
@@ -297,6 +345,11 @@ func (r *room) broadcastState() {
 		// goroutine while a per-connection writer goroutine may still be
 		// marshaling this message concurrently.
 		handCopy := append([]Card(nil), g.hands[id]...)
+		var yourDrawn *Card
+		if g.drawPending && g.lastDrawnCard != nil && id == g.currentPlayer() {
+			c := *g.lastDrawnCard
+			yourDrawn = &c
+		}
 		msg := outMsg{
 			Type:            "state",
 			Hand:            handCopy,
@@ -307,6 +360,7 @@ func (r *room) broadcastState() {
 			YourTurn:        id == g.currentPlayer(),
 			DeckCount:       len(g.deck),
 			Log:             logCopy,
+			YourDrawnCard:   yourDrawn,
 		}
 		select {
 		case p.send <- msg:

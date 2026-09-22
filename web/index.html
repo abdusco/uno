@@ -17,7 +17,7 @@
 </head>
 <body>
 
-  <main id="app" x-data="unoParty" x-init="init()" x-cloak>
+  <main id="app" x-data="unoParty" x-init="init()" x-cloak :class="{ 'app--game': screen === 'game' }">
 
     <!-- connecting overlay -->
     <div class="overlay" x-show="status === 'connecting'" x-cloak>
@@ -100,19 +100,105 @@
       </div>
     </section>
 
-    <!-- screen 3: game (stub - card logic goes here) -->
-    <section class="screen" x-show="screen === 'game'" x-cloak>
-      <div class="card">
-        <h1>🎴 Game on!</h1>
-        <p>Everyone's in. This is where the UNO table goes.</p>
-        <ul class="players">
-          <template x-for="p in players" :key="p.id">
-            <li>
-              <span x-text="p.name"></span>
-              <span class="you" x-show="p.id === selfId">(you)</span>
+    <!-- screen 3: game table -->
+    <section class="screen screen--game" x-show="screen === 'game'" x-cloak>
+      <div class="game-screen">
+
+        <header class="game-header">
+          <span class="room-chip" x-text="`Room ${roomId}`"></span>
+          <p class="turn-banner" :class="{ 'turn-banner--you': yourTurn }"
+             x-text="yourTurn ? 'Your turn!' : `Waiting for ${gamePlayers.find(p => p.id === currentPlayerId)?.name || '…'}…`"></p>
+        </header>
+
+        <ul class="opponents">
+          <template x-for="p in gamePlayers.filter(p => p.id !== selfId)" :key="p.id">
+            <li class="opponents__item" :class="{ 'opponents__item--turn': p.isCurrentTurn }">
+              <span class="opponents__name" x-text="p.name"></span>
+              <span class="opponents__count" x-text="p.handCount"></span>
+              <span class="opponents__uno" x-show="p.handCount === 1 && p.unoCalled">UNO!</span>
+              <button class="opponents__catch" x-show="isCatchable(p)" @click="catchUno(p.id)">Catch!</button>
             </li>
           </template>
         </ul>
+
+        <div class="table-center">
+          <div class="pile-row">
+            <button class="pile pile--deck" @click="drawCard()" :disabled="!yourTurn || yourDrawnCard"
+                    title="Draw a card">
+              <span class="card-stack">
+                <span class="card-stack__layer card-stack__layer--3"></span>
+                <span class="card-stack__layer card-stack__layer--2"></span>
+                <span class="pile__back card-stack__layer card-stack__layer--1"></span>
+              </span>
+              <span class="pile__count" x-text="deckCount"></span>
+            </button>
+
+            <div class="pile pile--discard">
+              <span class="card-stack">
+                <span class="card-stack__layer card-stack__layer--3" :class="`uno-card--${topColor}`" x-show="discardTop"></span>
+                <span class="card-stack__layer card-stack__layer--2" :class="`uno-card--${topColor}`" x-show="discardTop"></span>
+                <template x-for="d in (discardTop ? [discardTop] : [])" :key="d.id">
+                  <span class="uno-card card-stack__layer card-stack__layer--1" :class="`uno-card--${topColor}`"
+                        x-transition:enter.scale.80.duration.300ms>
+                    <span x-text="cardGlyph(d)"></span>
+                  </span>
+                </template>
+              </span>
+              <span class="pile__count">discard</span>
+            </div>
+          </div>
+        </div>
+
+        <ul class="log">
+          <template x-for="(line, i) in log.slice().reverse()" :key="i">
+            <li x-text="line"></li>
+          </template>
+        </ul>
+
+      </div>
+
+      <div class="hand-tray">
+        <div class="hand">
+          <template x-for="c in hand" :key="c.id">
+            <button class="uno-card" :class="cardClass(c)"
+                    @click="playCard(c)" :title="cardLabel(c)"
+                    x-transition:enter.scale.80.duration.250ms>
+              <span x-text="cardGlyph(c)"></span>
+            </button>
+          </template>
+        </div>
+      </div>
+
+      <button class="uno-fab" x-show="canCallUno()" x-transition:enter.scale.80 @click="callUno()">UNO!</button>
+
+      <!-- mini prompt: play the card you just drew, or keep it -->
+      <div class="draw-prompt" x-show="yourDrawnCard" x-cloak x-transition:enter.scale.90>
+        <span class="uno-card" :class="`uno-card--${yourDrawnCard && yourDrawnCard.color}`">
+          <span x-text="yourDrawnCard && cardGlyph(yourDrawnCard)"></span>
+        </span>
+        <p class="draw-prompt__label">You drew <span x-text="yourDrawnCard && cardLabel(yourDrawnCard)"></span></p>
+        <div class="draw-prompt__actions">
+          <button class="btn btn--primary" @click="playDrawnCard()">Play it</button>
+          <button class="btn" @click="keepDrawnCard()">Keep in hand</button>
+        </div>
+      </div>
+
+      <!-- wild color picker -->
+      <div class="overlay" x-show="pendingWildCard" x-cloak>
+        <p>Pick a color</p>
+        <div class="color-picker">
+          <button class="color-swatch color-swatch--red" @click="chooseColor('red')" aria-label="Red"></button>
+          <button class="color-swatch color-swatch--yellow" @click="chooseColor('yellow')" aria-label="Yellow"></button>
+          <button class="color-swatch color-swatch--green" @click="chooseColor('green')" aria-label="Green"></button>
+          <button class="color-swatch color-swatch--blue" @click="chooseColor('blue')" aria-label="Blue"></button>
+        </div>
+        <button class="btn" @click="cancelWildPick()">Cancel</button>
+      </div>
+
+      <!-- game over banner -->
+      <div class="overlay" x-show="gameOver" x-cloak>
+        <p class="game-over__title">🎉 <span x-text="gameOver && gameOver.winnerName"></span> wins!</p>
+        <button class="btn btn--primary" @click="backToLobby()">Back to lobby</button>
       </div>
     </section>
 

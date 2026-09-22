@@ -214,3 +214,374 @@ input[type="text"]:focus {
   width: auto;
   padding: 10px 20px;
 }
+
+/* --- game table --- */
+
+/* the game screen wants the full viewport, not the centered narrow card
+   used by the name/lobby screens. */
+.app--game {
+  padding: 0;
+  align-items: stretch;
+  justify-content: stretch;
+  display: block;
+}
+
+.app--game .screen {
+  padding: 0;
+}
+
+.game-screen {
+  box-sizing: border-box;
+  width: 100%;
+  max-width: 720px;
+  margin: 0 auto;
+  min-height: 100vh;
+  min-height: 100dvh;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: max(12px, env(safe-area-inset-top)) 12px 190px;
+  color: white;
+}
+
+.game-header {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+}
+
+.room-chip {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: .75rem;
+  letter-spacing: .05em;
+  color: rgba(255,255,255,.5);
+}
+
+.turn-banner {
+  margin: 0;
+  text-align: center;
+  font-weight: 700;
+  font-size: 1.1rem;
+  color: rgba(255,255,255,.7);
+}
+
+.turn-banner--you {
+  color: #fff;
+  animation: turnPulse 1.6s ease-in-out infinite;
+}
+
+@keyframes turnPulse {
+  0%, 100% { transform: scale(1); }
+  50% { transform: scale(1.06); }
+}
+
+.opponents {
+  list-style: none;
+  padding: 0 2px;
+  margin: 0;
+  display: flex;
+  gap: 8px;
+  overflow-x: auto;
+  flex-shrink: 0;
+}
+
+.opponents__item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 12px;
+  background: rgba(255,255,255,.08);
+  border-radius: 999px;
+  font-size: .85rem;
+  font-weight: 500;
+  flex-shrink: 0;
+  transition: background .2s, outline-color .2s;
+}
+
+.opponents__item--turn {
+  outline: 2px solid var(--red);
+  background: rgba(220,38,38,.25);
+}
+
+.opponents__count {
+  background: rgba(255,255,255,.9);
+  color: var(--text);
+  border-radius: 999px;
+  min-width: 20px;
+  height: 20px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: .75rem;
+  padding: 0 4px;
+}
+
+.opponents__uno {
+  color: #fde047;
+  font-weight: 800;
+  font-size: .75rem;
+}
+
+.opponents__catch {
+  background: var(--red);
+  color: white;
+  border: none;
+  border-radius: 999px;
+  padding: 3px 10px;
+  font-size: .7rem;
+  font-weight: 700;
+  cursor: pointer;
+  animation: turnPulse 1s ease-in-out infinite;
+}
+
+.table-center {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 160px;
+}
+
+.pile-row {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  gap: clamp(24px, 8vw, 48px);
+}
+
+.pile {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  background: none;
+  border: none;
+  padding: 0;
+}
+
+.pile--deck {
+  cursor: pointer;
+}
+
+.pile--deck:disabled {
+  cursor: not-allowed;
+  opacity: .5;
+}
+
+.pile--deck:not(:disabled):active .card-stack {
+  transform: scale(.94);
+}
+
+.card-stack {
+  position: relative;
+  width: 72px;
+  height: 104px;
+  display: block;
+  transition: transform .15s ease;
+}
+
+.card-stack__layer {
+  position: absolute;
+  inset: 0;
+  border-radius: 12px;
+}
+
+.card-stack__layer--3 { transform: rotate(6deg) translateY(2px); opacity: .5; }
+.card-stack__layer--2 { transform: rotate(-4deg) translateY(1px); opacity: .75; }
+.card-stack__layer--1 { transform: none; }
+
+.pile__back {
+  background: linear-gradient(135deg, var(--red), var(--red-dark));
+  border: 3px solid white;
+  box-shadow: 0 6px 16px rgba(0,0,0,.35);
+}
+
+.pile__count {
+  font-size: .75rem;
+  color: rgba(255,255,255,.6);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: .05em;
+}
+
+.uno-card {
+  width: 72px;
+  height: 104px;
+  border-radius: 12px;
+  border: 3px solid white;
+  box-shadow: 0 6px 16px rgba(0,0,0,.35);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 1.7rem;
+  font-weight: 800;
+  color: white;
+  flex-shrink: 0;
+  cursor: pointer;
+  padding: 0;
+  transition: transform .15s ease, box-shadow .15s ease;
+}
+
+.uno-card--red { background: var(--red); }
+.uno-card--yellow { background: #ca8a04; }
+.uno-card--green { background: #16a34a; }
+.uno-card--blue { background: #2563eb; }
+.uno-card--wild { background: linear-gradient(135deg, #dc2626, #ca8a04, #16a34a, #2563eb); }
+
+.uno-card--disabled {
+  opacity: .45;
+  cursor: not-allowed;
+}
+
+/* playable cards sit raised on your turn - a constant affordance rather
+   than a hover-only one, since most players are on touch devices. */
+.hand button.uno-card:not(.uno-card--disabled) {
+  transform: translateY(-14px);
+  box-shadow: 0 10px 20px rgba(0,0,0,.4);
+}
+
+.hand button.uno-card:not(.uno-card--disabled):hover {
+  transform: translateY(-20px);
+}
+
+.hand button.uno-card:not(.uno-card--disabled):active {
+  transform: translateY(-8px) scale(.96);
+}
+
+.pile--discard .uno-card {
+  cursor: default;
+}
+
+.hand-tray {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  padding: 10px 12px max(10px, env(safe-area-inset-bottom));
+  background: linear-gradient(to top, rgba(15,10,20,.95), rgba(15,10,20,.75) 80%, transparent);
+}
+
+.hand {
+  display: flex;
+  gap: 8px;
+  width: max-content;
+  max-width: 100%;
+  margin: 0 auto;
+  overflow-x: auto;
+  /* extra top padding so playable cards can lift (translateY) without
+     being clipped by this scroll container's box. */
+  padding: 26px 6px 6px;
+}
+
+.uno-fab {
+  position: fixed;
+  right: max(16px, env(safe-area-inset-right));
+  bottom: max(150px, calc(150px + env(safe-area-inset-bottom)));
+  width: 64px;
+  height: 64px;
+  border-radius: 999px;
+  border: 3px solid white;
+  background: linear-gradient(135deg, var(--red), var(--red-dark));
+  color: white;
+  font-weight: 800;
+  font-size: .85rem;
+  cursor: pointer;
+  box-shadow: 0 8px 24px rgba(220,38,38,.5);
+  animation: unoFabPulse 1.4s ease-in-out infinite;
+  z-index: 40;
+}
+
+.uno-fab:active {
+  transform: scale(.92);
+}
+
+.draw-prompt {
+  position: fixed;
+  /* centered via left/right/margin rather than translateX(-50%) so it
+     doesn't fight Alpine's x-transition.scale, which also animates
+     `transform` on this element. */
+  left: 0;
+  right: 0;
+  margin: 0 auto;
+  width: max-content;
+  bottom: max(150px, calc(150px + env(safe-area-inset-bottom)));
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  padding: 14px;
+  background: rgba(20,14,26,.97);
+  border: 1px solid rgba(255,255,255,.15);
+  border-radius: 16px;
+  box-shadow: 0 12px 32px rgba(0,0,0,.5);
+  z-index: 45;
+  max-width: min(90vw, 320px);
+}
+
+.draw-prompt__label {
+  margin: 0;
+  font-size: .85rem;
+  color: rgba(255,255,255,.75);
+  text-align: center;
+}
+
+.draw-prompt__actions {
+  display: flex;
+  gap: 8px;
+  width: 100%;
+}
+
+.draw-prompt__actions .btn {
+  width: auto;
+  flex: 1;
+  padding: 10px 14px;
+  margin: 0;
+  white-space: nowrap;
+  font-size: .85rem;
+}
+
+@keyframes unoFabPulse {
+  0%, 100% { transform: scale(1); }
+  50% { transform: scale(1.08); }
+}
+
+.log {
+  list-style: none;
+  margin: 0;
+  padding: 10px 12px;
+  background: rgba(255,255,255,.06);
+  border-radius: 10px;
+  max-height: 96px;
+  overflow-y: auto;
+  font-size: .78rem;
+  color: rgba(255,255,255,.6);
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  flex-shrink: 0;
+}
+
+.color-picker {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 12px;
+}
+
+.color-swatch {
+  width: 64px;
+  height: 64px;
+  border-radius: 14px;
+  border: 3px solid white;
+  cursor: pointer;
+}
+
+.color-swatch--red { background: var(--red); }
+.color-swatch--yellow { background: #ca8a04; }
+.color-swatch--green { background: #16a34a; }
+.color-swatch--blue { background: #2563eb; }
+
+.game-over__title {
+  font-size: 1.3rem;
+  font-weight: 700;
+}

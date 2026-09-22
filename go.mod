@@ -5,6 +5,7 @@ go 1.22
 require (
 	github.com/coder/websocket v1.8.12
 	github.com/labstack/echo/v4 v4.11.4
+	github.com/stretchr/testify v1.12.1
 )
 
 require (
@@ -14,6 +15,7 @@ require (
 	github.com/mattn/go-isatty v0.0.20 // indirect
 	github.com/valyala/bytebufferpool v1.0.0 // indirect
 	github.com/valyala/fasttemplate v1.2.2 // indirect
+	go.yaml.in/yaml/v3 v3.0.5 // indirect
 	golang.org/x/crypto v0.17.0 // indirect
 	golang.org/x/net v0.19.0 // indirect
 	golang.org/x/sys v0.15.0 // indirect
