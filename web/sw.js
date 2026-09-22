@@ -1,4 +1,4 @@
-const CACHE_NAME = 'uno-party-v23';
+const CACHE_NAME = 'uno-party-v24';
 const SHELL_ASSETS = [
   '/',
   '/index.html',

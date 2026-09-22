@@ -5,6 +5,9 @@ const CARD_GAP = 8;
 // Cards in a row never overlap by more than this fraction of their width
 // before the hand splits into another row instead.
 const MAX_CARD_OVERLAP = 0.3;
+// One sixteenth-note in the background arrangement (about 83 BPM). The
+// sequence spans 32 steps / two bars before repeating.
+const MUSIC_STEP_SECONDS = 0.18;
 // Rough horizontal padding budget (both sides combined) around the hand
 // row, subtracted from the viewport width to get available card-row width.
 const HAND_SIDE_PADDING = 24;
@@ -152,6 +155,10 @@ document.addEventListener('alpine:init', () => {
     audioContext: null,
     /** @type {number|null} */
     musicTimer: null,
+    /** @type {GainNode|null} */
+    musicGain: null,
+    /** @type {number|null} */
+    musicFadeTimer: null,
     musicStep: 0,
     lastDiscardCardId: '',
 
@@ -409,8 +416,8 @@ document.addEventListener('alpine:init', () => {
         case 'gameOver':
           this.gameOver = { winnerId: msg.winnerId, winnerName: msg.winnerName };
           this.pendingWildCard = null;
+          this.stopMusic(true);
           if (msg.winnerId === this.selfId) {
-            this.stopMusic();
             this.playTriumphSfx();
           }
           break;
@@ -480,8 +487,16 @@ document.addEventListener('alpine:init', () => {
     startMusic() {
       if (!this.musicEnabled || this.musicTimer !== null) return;
       if (!this.prepareAudio()) return;
+      if (this.musicFadeTimer !== null) {
+        clearTimeout(this.musicFadeTimer);
+        this.musicFadeTimer = null;
+      }
+      const now = this.audioContext.currentTime;
+      this.musicGain.gain.cancelScheduledValues(now);
+      this.musicGain.gain.setValueAtTime(Math.max(this.musicGain.gain.value, .0001), now);
+      this.musicGain.gain.exponentialRampToValueAtTime(.72, now + .45);
       this.playMusicStep();
-      this.musicTimer = window.setInterval(() => this.playMusicStep(), 250);
+      this.musicTimer = window.setInterval(() => this.playMusicStep(), MUSIC_STEP_SECONDS * 1000);
     },
 
     /**
@@ -494,37 +509,100 @@ document.addEventListener('alpine:init', () => {
       const AudioContextClass = window.AudioContext || window.webkitAudioContext;
       if (!AudioContextClass) return false;
       this.audioContext ||= new AudioContextClass();
+      if (!this.musicGain) {
+        this.musicGain = this.audioContext.createGain();
+        this.musicGain.gain.value = .72;
+        this.musicGain.connect(this.audioContext.destination);
+      }
       this.audioContext.resume().catch(() => {
         // A later user gesture will resume it if this one was too early.
       });
       return true;
     },
 
-    /** @returns {void} */
-    stopMusic() {
-      if (this.musicTimer === null) return;
-      clearInterval(this.musicTimer);
-      this.musicTimer = null;
+    /**
+     * @param {boolean} [fadeOut=false]
+     * @returns {void}
+     */
+    stopMusic(fadeOut = false) {
+      if (this.musicTimer !== null) {
+        clearInterval(this.musicTimer);
+        this.musicTimer = null;
+      }
+      if (!this.audioContext || !this.musicGain) return;
+      if (this.musicFadeTimer !== null) {
+        clearTimeout(this.musicFadeTimer);
+        this.musicFadeTimer = null;
+      }
+      const now = this.audioContext.currentTime;
+      this.musicGain.gain.cancelScheduledValues(now);
+      this.musicGain.gain.setValueAtTime(Math.max(this.musicGain.gain.value, .0001), now);
+      if (fadeOut) {
+        this.musicGain.gain.exponentialRampToValueAtTime(.0001, now + 1.25);
+        this.musicFadeTimer = window.setTimeout(() => {
+          this.musicFadeTimer = null;
+        }, 1300);
+      } else {
+        this.musicGain.gain.setValueAtTime(.0001, now);
+      }
     },
 
     /** @returns {void} */
     playMusicStep() {
-      if (!this.audioContext || this.audioContext.state !== 'running') return;
-      // A tiny major-pentatonic arpeggio: bright enough for an arcade table,
-      // deliberately quiet enough to sit behind conversation.
-      const notes = [261.63, 329.63, 392, 523.25, 392, 329.63, 293.66, 392];
+      if (!this.audioContext || !this.musicGain || this.audioContext.state !== 'running') return;
+      // Four harmonically distinct phrases: Cmaj7, Am7, Fmaj7 and G7. A
+      // syncopated lead sits over a rotating arpeggio, with bass on quarter
+      // notes and a tiny pitched click on the offbeats.
+      const chords = [
+        [261.63, 329.63, 392, 493.88],
+        [220, 261.63, 329.63, 392],
+        [174.61, 220, 261.63, 329.63],
+        [196, 246.94, 293.66, 349.23],
+      ];
+      const bassRoots = [130.81, 110, 87.31, 98];
+      const lead = [
+        659.25, null, 783.99, 880, null, 783.99, 659.25, 587.33,
+        523.25, null, 659.25, 783.99, 659.25, null, 587.33, null,
+        523.25, 659.25, null, 698.46, 783.99, null, 698.46, 659.25,
+        587.33, null, 659.25, 783.99, 880, 783.99, 698.46, 587.33,
+      ];
+      const step = this.musicStep % lead.length;
+      const chordIndex = Math.floor(step / 8);
+      const chord = chords[chordIndex];
       const now = this.audioContext.currentTime;
+
+      this.scheduleMusicNote(chord[step % chord.length], now, .3, 'sine', .012);
+      if (step % 4 === 0) {
+        this.scheduleMusicNote(bassRoots[chordIndex], now, .58, 'triangle', .024);
+      }
+      if (lead[step]) {
+        this.scheduleMusicNote(lead[step], now, step % 4 === 0 ? .28 : .18, 'triangle', .02);
+      }
+      if (step % 2 === 1) {
+        this.scheduleMusicNote(step % 4 === 1 ? 1174.66 : 987.77, now, .035, 'square', .0035);
+      }
+      this.musicStep++;
+    },
+
+    /**
+     * @param {number} frequency
+     * @param {number} start
+     * @param {number} duration
+     * @param {OscillatorType} type
+     * @param {number} volume
+     * @returns {void}
+     */
+    scheduleMusicNote(frequency, start, duration, type, volume) {
       const oscillator = this.audioContext.createOscillator();
       const gain = this.audioContext.createGain();
-      oscillator.type = this.musicStep % 8 === 0 ? 'triangle' : 'sine';
-      oscillator.frequency.value = notes[this.musicStep % notes.length];
-      gain.gain.setValueAtTime(0.0001, now);
-      gain.gain.exponentialRampToValueAtTime(this.musicStep % 4 === 0 ? 0.026 : 0.014, now + 0.018);
-      gain.gain.exponentialRampToValueAtTime(0.0001, now + 0.22);
-      oscillator.connect(gain).connect(this.audioContext.destination);
-      oscillator.start(now);
-      oscillator.stop(now + 0.23);
-      this.musicStep++;
+      oscillator.type = type;
+      oscillator.frequency.value = frequency;
+      gain.gain.setValueAtTime(.0001, start);
+      gain.gain.exponentialRampToValueAtTime(volume, start + .012);
+      gain.gain.exponentialRampToValueAtTime(.0001, start + duration);
+      oscillator.connect(gain).connect(this.musicGain);
+      oscillator.start(start);
+      oscillator.stop(start + duration + .01);
     },
 
     /**
