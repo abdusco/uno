@@ -702,24 +702,44 @@ document.addEventListener('alpine:init', () => {
       });
     },
 
-    /** @returns {void} */
+    /**
+     * A quick ascending run building into a stacked landing chord, rather
+     * than one plain rising arpeggio - the run-up (square wave, tight
+     * spacing) creates anticipation that resolves into a fuller, longer-held
+     * chord (triangle wave, slightly strummed) instead of a single note.
+     * @returns {void}
+     */
     playTriumphSfx() {
       if (!this.prepareAudio() || this.audioContext.state !== 'running') return;
       const now = this.audioContext.currentTime;
-      const notes = [523.25, 659.25, 783.99, 1046.5];
-      notes.forEach((frequency, index) => {
+      const run = [523.25, 587.33, 659.25, 783.99, 880, 1046.5]; // C5 D5 E5 G5 A5 C6
+      run.forEach((frequency, index) => {
         const oscillator = this.audioContext.createOscillator();
         const gain = this.audioContext.createGain();
-        const start = now + index * .14;
-        const duration = index === notes.length - 1 ? .5 : .2;
-        oscillator.type = index === notes.length - 1 ? 'triangle' : 'square';
+        const start = now + index * .075;
+        oscillator.type = 'square';
         oscillator.frequency.value = frequency;
         gain.gain.setValueAtTime(.0001, start);
-        gain.gain.exponentialRampToValueAtTime(.055, start + .018);
-        gain.gain.exponentialRampToValueAtTime(.0001, start + duration);
+        gain.gain.exponentialRampToValueAtTime(.05, start + .012);
+        gain.gain.exponentialRampToValueAtTime(.0001, start + .16);
         oscillator.connect(gain).connect(this.audioContext.destination);
         oscillator.start(start);
-        oscillator.stop(start + duration + .01);
+        oscillator.stop(start + .17);
+      });
+      const chordStart = now + run.length * .075;
+      const chord = [1046.5, 1318.51, 1567.98]; // C6 E6 G6
+      chord.forEach((frequency, index) => {
+        const oscillator = this.audioContext.createOscillator();
+        const gain = this.audioContext.createGain();
+        const start = chordStart + index * .02;
+        oscillator.type = 'triangle';
+        oscillator.frequency.value = frequency;
+        gain.gain.setValueAtTime(.0001, start);
+        gain.gain.exponentialRampToValueAtTime(.06, start + .02);
+        gain.gain.exponentialRampToValueAtTime(.0001, start + .65);
+        oscillator.connect(gain).connect(this.audioContext.destination);
+        oscillator.start(start);
+        oscillator.stop(start + .66);
       });
     },
 
