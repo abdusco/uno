@@ -226,6 +226,32 @@ func TestPlayCard(t *testing.T) {
 		assert.Equal(t, "p2", g.currentPlayer())
 	})
 
+	t.Run("after drawing only the drawn card may be played", func(t *testing.T) {
+		g := newTestGame([]Card{
+			{ID: "held", Color: "red", Value: "3"},
+			filler,
+		})
+		g.deck = []Card{{ID: "drawn", Color: "red", Value: "7"}}
+		_, err := g.drawCard("p1", nameOfStub)
+		require.NoError(t, err)
+
+		err = g.playCard("p1", "held", "", nameOfStub)
+		assertIllegalMove(t, err, "after drawing, you may only play the card you drew")
+		assert.True(t, g.drawPending)
+		assert.Len(t, g.hands["p1"], 3)
+	})
+
+	t.Run("the drawn card may be played immediately", func(t *testing.T) {
+		g := newTestGame([]Card{{ID: "held", Color: "blue", Value: "3"}, filler})
+		g.deck = []Card{{ID: "drawn", Color: "red", Value: "7"}}
+		_, err := g.drawCard("p1", nameOfStub)
+		require.NoError(t, err)
+
+		require.NoError(t, g.playCard("p1", "drawn", "", nameOfStub))
+		assert.False(t, g.drawPending)
+		assert.Equal(t, "p2", g.currentPlayer())
+	})
+
 	t.Run("emptying your hand wins the game", func(t *testing.T) {
 		g := newTestGame([]Card{{ID: "c1", Color: "red", Value: "3"}})
 		g.hands["p1"] = []Card{{ID: "c1", Color: "red", Value: "3"}}

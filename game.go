@@ -100,7 +100,7 @@ type gameState struct {
 	unoCatchableID string
 
 	// drawPending is true from the moment the current player draws a card
-	// until they either play it (or any other card) or explicitly pass -
+	// until they either play that card or explicitly pass -
 	// this is what lets a player decide whether to play a just-drawn card
 	// immediately instead of it silently ending their turn. lastDrawnCard
 	// is only meaningful while drawPending is true.
@@ -206,6 +206,9 @@ func (g *gameState) playCard(playerID, cardID, chosenColor string, nameOf func(s
 		return ErrIllegalMove{Message: "you don't have that card"}
 	}
 	card := hand[idx]
+	if g.drawPending && (g.lastDrawnCard == nil || card.ID != g.lastDrawnCard.ID) {
+		return ErrIllegalMove{Message: "after drawing, you may only play the card you drew"}
+	}
 	if !g.isPlayable(card) {
 		return ErrIllegalMove{Message: "that card doesn't match the discard pile"}
 	}
@@ -301,9 +304,7 @@ func (g *gameState) playCard(playerID, cardID, chosenColor string, nameOf func(s
 // drawCard gives the current player one card. It does not end their turn by
 // itself - the caller (room.go) checks whether the drawn card is playable
 // and, if so, leaves drawPending set so the player can choose to play it
-// immediately or keep it (passTurn ends the turn for the latter case). This
-// is still a deliberate simplification versus real UNO: no forced play, and
-// no draw-stacking on draw-twos/wild-fours.
+// immediately or keep it (passTurn ends the turn for the latter case).
 func (g *gameState) drawCard(playerID string, nameOf func(string) string) (Card, error) {
 	if g.currentPlayer() != playerID {
 		return Card{}, ErrIllegalMove{Message: "it's not your turn"}
