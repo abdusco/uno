@@ -463,7 +463,10 @@ func (r *room) autoSkipDisconnected() {
 
 func (r *room) handleAction(act roomAction) {
 	p, ok := r.players[act.playerID]
-	if !ok {
+	if !ok || !p.connected {
+		// A disconnected player's send channel is already closed (see
+		// handleLeave) - there's no socket left to deliver a reply to, so
+		// drop the action instead of risking sendError writing to it.
 		return
 	}
 	switch act.msg.Type {
