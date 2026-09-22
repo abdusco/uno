@@ -270,8 +270,6 @@ document.addEventListener('alpine:init', () => {
 
       ws.addEventListener('open', () => {
         if (this.ws !== ws) return;
-        this.status = 'ready';
-        this.reconnectAttempts = 0;
         ws.send(JSON.stringify(helloMsg));
       });
 
@@ -332,6 +330,11 @@ document.addEventListener('alpine:init', () => {
     handleMessage(msg) {
       switch (msg.type) {
         case 'joined':
+          // Opening the TCP/WebSocket connection is not enough to prove a
+          // reconnect succeeded: the server can still reject the hello. Only
+          // reset backoff once it has accepted our room identity.
+          this.status = 'ready';
+          this.reconnectAttempts = 0;
           this.roomId = msg.roomId;
           this.selfId = msg.self.id;
           this.isHost = msg.self.isHost;
@@ -395,7 +398,7 @@ document.addEventListener('alpine:init', () => {
           break;
         case 'error':
           this.errorMsg = msg.message || 'Something went wrong.';
-          if (msg.message === 'room not found' && this.joiningRoom) this.resetMissingRoom();
+          if (msg.message === 'room not found' && (this.joiningRoom || this.roomId)) this.resetMissingRoom();
           break;
       }
     },
@@ -408,7 +411,7 @@ document.addEventListener('alpine:init', () => {
      * @returns {void}
      */
     resetMissingRoom() {
-      const missingRoom = this.joiningRoom;
+      const missingRoom = this.roomId || this.joiningRoom;
       this.clearCachedIdentity(missingRoom);
       if (this.ws) {
         const staleSocket = this.ws;
@@ -424,7 +427,13 @@ document.addEventListener('alpine:init', () => {
       this.selfId = '';
       this.token = '';
       this._firstHello = null;
+      this.reconnectAttempts = 0;
       this.status = 'ready';
+      this.screen = 'name';
+      this.players = [];
+      this.gamePlayers = [];
+      this.hand = [];
+      this.gameOver = null;
       this.errorMsg = 'That room no longer exists. Create a new room or join one with a code.';
       history.replaceState({}, '', '/');
       this.$nextTick(() => this.$refs.nameInput && this.$refs.nameInput.focus());
