@@ -66,6 +66,7 @@ const HAND_SIDE_PADDING = 24;
  * @property {number} [deckCount]
  * @property {string[]} [log]
  * @property {Card} [yourDrawnCard]
+ * @property {boolean} [canChallengeWild4]
  * @property {string} [token] - only on "joined"; cache it for next time.
  * @property {boolean} [resumed] - only on "joined"; true if this reconnected
  *   an existing player rather than creating a new one.
@@ -138,6 +139,7 @@ document.addEventListener('alpine:init', () => {
     // actually playable - shows the "play it or keep it" mini-prompt.
     /** @type {Card|null} */
     yourDrawnCard: null,
+    canChallengeWild4: false,
 
     // set once the round ends; cleared when everyone goes back to the lobby.
     /** @type {{winnerId: string, winnerName: string}|null} */
@@ -375,6 +377,7 @@ document.addEventListener('alpine:init', () => {
           break;
         case 'started':
           this.gameOver = null;
+          this.canChallengeWild4 = false;
           this.screen = 'game';
           this.startMusic();
           break;
@@ -391,6 +394,7 @@ document.addEventListener('alpine:init', () => {
           this.deckCount = msg.deckCount || 0;
           this.log = msg.log || [];
           this.yourDrawnCard = msg.yourDrawnCard || null;
+          this.canChallengeWild4 = !!msg.canChallengeWild4;
           this.lastDiscardCardId = this.discardTop ? this.discardTop.id : '';
           // Ignore the first state snapshot; after that, these differences
           // correspond to a card landing on the discard pile or leaving the
@@ -416,6 +420,7 @@ document.addEventListener('alpine:init', () => {
         case 'gameOver':
           this.gameOver = { winnerId: msg.winnerId, winnerName: msg.winnerName };
           this.pendingWildCard = null;
+          this.canChallengeWild4 = false;
           this.stopMusic(true);
           if (msg.winnerId === this.selfId) {
             this.playTriumphSfx();
@@ -458,6 +463,7 @@ document.addEventListener('alpine:init', () => {
       this.players = [];
       this.gamePlayers = [];
       this.hand = [];
+      this.canChallengeWild4 = false;
       this.gameOver = null;
       this.errorMsg = 'That room no longer exists. Create a new room or join one with a code.';
       history.replaceState({}, '', '/');
@@ -740,7 +746,7 @@ document.addEventListener('alpine:init', () => {
      */
     cardClass(card) {
       let cls = `uno-card--${card.color}`;
-      if (!this.yourTurn || this.waitingForReconnect() || !this.isPlayable(card)) cls += ' uno-card--disabled';
+      if (!this.yourTurn || this.canChallengeWild4 || this.waitingForReconnect() || !this.isPlayable(card)) cls += ' uno-card--disabled';
       return cls;
     },
 
@@ -798,7 +804,7 @@ document.addEventListener('alpine:init', () => {
      * @returns {void}
      */
     playCard(card) {
-      if (!this.yourTurn || this.waitingForReconnect() || !this.isPlayable(card)) return;
+      if (!this.yourTurn || this.canChallengeWild4 || this.waitingForReconnect() || !this.isPlayable(card)) return;
       if (card.color === 'wild') {
         this.pendingWildCard = card;
         return;
@@ -834,7 +840,7 @@ document.addEventListener('alpine:init', () => {
 
     /** @returns {void} */
     drawCard() {
-      if (!this.ws || !this.yourTurn || this.yourDrawnCard || this.waitingForReconnect()) return;
+      if (!this.ws || !this.yourTurn || this.yourDrawnCard || this.canChallengeWild4 || this.waitingForReconnect()) return;
       this.prepareAudio();
       this.ws.send(JSON.stringify({ type: 'draw' }));
     },
@@ -858,6 +864,18 @@ document.addEventListener('alpine:init', () => {
     keepDrawnCard() {
       if (!this.ws) return;
       this.ws.send(JSON.stringify({ type: 'pass' }));
+    },
+
+    /** @returns {void} */
+    acceptWildDrawFour() {
+      if (!this.ws || !this.canChallengeWild4) return;
+      this.ws.send(JSON.stringify({ type: 'acceptWild4' }));
+    },
+
+    /** @returns {void} */
+    challengeWildDrawFour() {
+      if (!this.ws || !this.canChallengeWild4) return;
+      this.ws.send(JSON.stringify({ type: 'challengeWild4' }));
     },
 
     /**

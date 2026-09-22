@@ -135,7 +135,7 @@
 
         <div class="table-center">
           <div class="pile-row">
-            <button class="pile pile--deck" @click="drawCard()" :disabled="!yourTurn || yourDrawnCard || waitingForReconnect()"
+            <button class="pile pile--deck" @click="drawCard()" :disabled="!yourTurn || yourDrawnCard || canChallengeWild4 || waitingForReconnect()"
                     title="Draw a card">
               <span class="card-stack">
                 <span class="card-stack__layer card-stack__layer--3"></span>
@@ -173,7 +173,7 @@
         <div class="hand" :style="{ '--card-gap': handCardGap() + 'px' }">
           <template x-for="c in hand" :key="c.id">
             <button class="uno-card" :class="cardClass(c)"
-                    :style="{ '--raise': (yourTurn && !waitingForReconnect() && isPlayable(c)) ? 1 : 0 }"
+                    :style="{ '--raise': (yourTurn && !canChallengeWild4 && !waitingForReconnect() && isPlayable(c)) ? 1 : 0 }"
                     @click="playCard(c)" :title="cardLabel(c)"
                     x-transition:enter.scale.80.duration.250ms>
               <span x-text="cardGlyph(c)"></span>
@@ -193,6 +193,16 @@
         <div class="draw-prompt__actions">
           <button class="btn btn--primary" @click="playDrawnCard()">Play it</button>
           <button class="btn" @click="keepDrawnCard()">Keep in hand</button>
+        </div>
+      </div>
+
+      <!-- Wild Draw Four response; only the affected player receives it. -->
+      <div class="overlay" x-show="canChallengeWild4" x-cloak>
+        <p>Wild Draw Four!</p>
+        <p>Accept 4 cards, or challenge if you think it was played illegally.</p>
+        <div class="draw-prompt__actions">
+          <button class="btn btn--primary" @click="acceptWildDrawFour()">Draw 4</button>
+          <button class="btn" @click="challengeWildDrawFour()">Challenge</button>
         </div>
       </div>
 

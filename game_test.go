@@ -2,6 +2,7 @@ package main
 
 import (
 	"errors"
+	"fmt"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -178,15 +179,17 @@ func TestPlayCard(t *testing.T) {
 		assert.Equal(t, "p3", g.currentPlayer())
 	})
 
-	t.Run("wild4 gives the next player four cards and skips them", func(t *testing.T) {
+	t.Run("wild4 waits for the next player to respond", func(t *testing.T) {
 		g := newTestGame([]Card{{ID: "c1", Color: "wild", Value: "wild4"}, filler})
 		g.deck = []Card{
 			{ID: "d1"}, {ID: "d2"}, {ID: "d3"}, {ID: "d4"},
 		}
 		require.NoError(t, g.playCard("p1", "c1", "blue", nameOfStub))
-		assert.Len(t, g.hands["p2"], 5) // 1 starting + 4 drawn
+		assert.Len(t, g.hands["p2"], 1)
 		assert.Equal(t, "blue", g.topColor)
-		assert.Equal(t, "p3", g.currentPlayer())
+		assert.Equal(t, "p2", g.currentPlayer())
+		require.NotNil(t, g.wildDrawFour)
+		assert.True(t, g.wildDrawFour.legal)
 	})
 
 	t.Run("colorbomb dumps every remaining card of the chosen color", func(t *testing.T) {
@@ -252,6 +255,19 @@ func TestPlayCard(t *testing.T) {
 		assert.Equal(t, "p2", g.currentPlayer())
 	})
 
+	t.Run("an invalid drawn wild attempt keeps the draw decision pending", func(t *testing.T) {
+		g := newTestGame([]Card{{ID: "held", Color: "blue", Value: "3"}, filler})
+		g.deck = []Card{{ID: "drawn", Color: "wild", Value: "wild"}}
+		_, err := g.drawCard("p1", nameOfStub)
+		require.NoError(t, err)
+
+		err = g.playCard("p1", "drawn", "", nameOfStub)
+		assertIllegalMove(t, err, "pick a color for the wild card")
+		assert.True(t, g.drawPending)
+		require.NotNil(t, g.lastDrawnCard)
+		assert.Equal(t, "drawn", g.lastDrawnCard.ID)
+	})
+
 	t.Run("emptying your hand wins the game", func(t *testing.T) {
 		g := newTestGame([]Card{{ID: "c1", Color: "red", Value: "3"}})
 		g.hands["p1"] = []Card{{ID: "c1", Color: "red", Value: "3"}}
@@ -273,6 +289,90 @@ func TestPlayCard(t *testing.T) {
 		require.NoError(t, g.playCard("p1", "c1", "", nameOfStub))
 		assert.False(t, g.unoCalled["p1"])
 		assert.Equal(t, "p1", g.unoCatchableID)
+	})
+}
+
+func TestWildDrawFourChallenge(t *testing.T) {
+	drawPile := func(n int) []Card {
+		cards := make([]Card, n)
+		for i := range cards {
+			cards[i] = Card{ID: fmt.Sprintf("draw-%d", i), Color: "blue", Value: "9"}
+		}
+		return cards
+	}
+
+	t.Run("accepting draws four and skips the victim", func(t *testing.T) {
+		g := newTestGame([]Card{
+			{ID: "wild4", Color: "wild", Value: "wild4"},
+			{ID: "safe", Color: "blue", Value: "2"},
+		})
+		g.deck = drawPile(4)
+		require.NoError(t, g.playCard("p1", "wild4", "green", nameOfStub))
+
+		require.NoError(t, g.acceptWildDrawFour("p2", nameOfStub))
+		assert.Len(t, g.hands["p2"], 5)
+		assert.Equal(t, "p3", g.currentPlayer())
+		assert.Nil(t, g.wildDrawFour)
+	})
+
+	t.Run("a failed challenge makes the victim draw six and lose their turn", func(t *testing.T) {
+		g := newTestGame([]Card{
+			{ID: "wild4", Color: "wild", Value: "wild4"},
+			{ID: "safe", Color: "blue", Value: "2"},
+		})
+		g.deck = drawPile(6)
+		require.NoError(t, g.playCard("p1", "wild4", "green", nameOfStub))
+
+		require.NoError(t, g.challengeWildDrawFour("p2", nameOfStub))
+		assert.Len(t, g.hands["p2"], 7)
+		assert.Len(t, g.hands["p1"], 1)
+		assert.Equal(t, "p3", g.currentPlayer())
+	})
+
+	t.Run("a successful challenge makes the illegal player draw four", func(t *testing.T) {
+		g := newTestGame([]Card{
+			{ID: "wild4", Color: "wild", Value: "wild4"},
+			{ID: "matching", Color: "red", Value: "2"},
+		})
+		g.deck = drawPile(4)
+		require.NoError(t, g.playCard("p1", "wild4", "green", nameOfStub))
+
+		require.NoError(t, g.challengeWildDrawFour("p2", nameOfStub))
+		assert.Len(t, g.hands["p1"], 5)
+		assert.Len(t, g.hands["p2"], 1)
+		assert.Equal(t, "p2", g.currentPlayer())
+	})
+
+	t.Run("only a card matching the current color makes the play illegal", func(t *testing.T) {
+		g := newTestGame([]Card{
+			{ID: "wild4", Color: "wild", Value: "wild4"},
+			{ID: "same-value", Color: "blue", Value: "5"},
+			{ID: "other-wild", Color: "wild", Value: "wild"},
+		})
+		require.NoError(t, g.playCard("p1", "wild4", "green", nameOfStub))
+		require.NotNil(t, g.wildDrawFour)
+		assert.True(t, g.wildDrawFour.legal)
+	})
+
+	t.Run("playing the last card waits for the penalty resolution before winning", func(t *testing.T) {
+		g := newTestGame([]Card{{ID: "wild4", Color: "wild", Value: "wild4"}})
+		g.deck = drawPile(4)
+		require.NoError(t, g.playCard("p1", "wild4", "green", nameOfStub))
+		assert.Empty(t, g.winnerID)
+
+		require.NoError(t, g.acceptWildDrawFour("p2", nameOfStub))
+		assert.Equal(t, "p1", g.winnerID)
+	})
+
+	t.Run("other moves are blocked until the challenge is resolved", func(t *testing.T) {
+		g := newTestGame([]Card{
+			{ID: "wild4", Color: "wild", Value: "wild4"},
+			{ID: "safe", Color: "blue", Value: "2"},
+		})
+		require.NoError(t, g.playCard("p1", "wild4", "green", nameOfStub))
+
+		_, err := g.drawCard("p2", nameOfStub)
+		assertIllegalMove(t, err, "resolve the Wild Draw Four first")
 	})
 }
 

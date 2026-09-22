@@ -106,6 +106,18 @@ type gameState struct {
 	// is only meaningful while drawPending is true.
 	drawPending   bool
 	lastDrawnCard *Card
+
+	// wildDrawFour is set after a Wild Draw Four is played and remains until
+	// the affected player accepts the draw or challenges the play. legal is
+	// deliberately kept server-side so the victim cannot inspect the hand by
+	// starting a challenge.
+	wildDrawFour *wildDrawFourChallenge
+}
+
+type wildDrawFourChallenge struct {
+	offenderID string
+	victimID   string
+	legal      bool
 }
 
 func startGame(order []string, nameOf func(string) string) *gameState {
@@ -191,6 +203,9 @@ func (g *gameState) isPlayable(c Card) bool {
 // chosenColor is required (and only used) for wild / wild4 cards. nameOf
 // resolves a playerID to a display name, used only for the activity log.
 func (g *gameState) playCard(playerID, cardID, chosenColor string, nameOf func(string) string) error {
+	if g.wildDrawFour != nil {
+		return ErrIllegalMove{Message: "resolve the Wild Draw Four first"}
+	}
 	if g.currentPlayer() != playerID {
 		return ErrIllegalMove{Message: "it's not your turn"}
 	}
@@ -212,8 +227,6 @@ func (g *gameState) playCard(playerID, cardID, chosenColor string, nameOf func(s
 	if !g.isPlayable(card) {
 		return ErrIllegalMove{Message: "that card doesn't match the discard pile"}
 	}
-	g.drawPending = false
-	g.lastDrawnCard = nil
 	if card.Color == "wild" {
 		valid := false
 		for _, c := range colors {
@@ -225,6 +238,17 @@ func (g *gameState) playCard(playerID, cardID, chosenColor string, nameOf func(s
 			return ErrIllegalMove{Message: "pick a color for the wild card"}
 		}
 	}
+	wildDrawFourLegal := true
+	if card.Value == "wild4" {
+		for i, held := range hand {
+			if i != idx && held.Color == g.topColor {
+				wildDrawFourLegal = false
+				break
+			}
+		}
+	}
+	g.drawPending = false
+	g.lastDrawnCard = nil
 	calledBeforePlay := g.unoCalled[playerID]
 	g.closeUnoCatchWindow()
 
@@ -262,10 +286,12 @@ func (g *gameState) playCard(playerID, cardID, chosenColor string, nameOf func(s
 		logLine += fmt.Sprintf(" \u2014 %s draws 2", nameOf(victim))
 	case "wild4":
 		victim := g.order[mod(g.turnIdx+g.direction, n)]
-		g.hands[victim] = append(g.hands[victim], g.draw(4)...)
-		g.unoCalled[victim] = false
-		skip = 1
-		logLine += fmt.Sprintf(" \u2014 %s draws 4", nameOf(victim))
+		g.wildDrawFour = &wildDrawFourChallenge{
+			offenderID: playerID,
+			victimID:   victim,
+			legal:      wildDrawFourLegal,
+		}
+		logLine += fmt.Sprintf(" \u2014 %s may challenge", nameOf(victim))
 	case "colorbomb":
 		var kept, dumped []Card
 		for _, hc := range g.hands[playerID] {
@@ -283,7 +309,7 @@ func (g *gameState) playCard(playerID, cardID, chosenColor string, nameOf func(s
 	}
 	g.addLog(logLine)
 
-	if len(g.hands[playerID]) == 0 {
+	if len(g.hands[playerID]) == 0 && g.wildDrawFour == nil {
 		g.unoCalled[playerID] = false
 		g.winnerID = playerID
 		return nil
@@ -306,6 +332,9 @@ func (g *gameState) playCard(playerID, cardID, chosenColor string, nameOf func(s
 // and, if so, leaves drawPending set so the player can choose to play it
 // immediately or keep it (passTurn ends the turn for the latter case).
 func (g *gameState) drawCard(playerID string, nameOf func(string) string) (Card, error) {
+	if g.wildDrawFour != nil {
+		return Card{}, ErrIllegalMove{Message: "resolve the Wild Draw Four first"}
+	}
 	if g.currentPlayer() != playerID {
 		return Card{}, ErrIllegalMove{Message: "it's not your turn"}
 	}
@@ -329,6 +358,9 @@ func (g *gameState) drawCard(playerID string, nameOf func(string) string) (Card,
 // passTurn ends the current player's turn after they've drawn a card and
 // decided not to play it (or it wasn't playable to begin with).
 func (g *gameState) passTurn(playerID string) error {
+	if g.wildDrawFour != nil {
+		return ErrIllegalMove{Message: "resolve the Wild Draw Four first"}
+	}
 	if g.currentPlayer() != playerID {
 		return ErrIllegalMove{Message: "it's not your turn"}
 	}
@@ -339,6 +371,58 @@ func (g *gameState) passTurn(playerID string) error {
 	g.lastDrawnCard = nil
 	g.turnIdx = mod(g.turnIdx+g.direction, len(g.order))
 	return nil
+}
+
+// acceptWildDrawFour makes the affected player take four cards and lose
+// their turn without exposing whether the card could legally have been used.
+func (g *gameState) acceptWildDrawFour(playerID string, nameOf func(string) string) error {
+	pending := g.wildDrawFour
+	if pending == nil {
+		return ErrIllegalMove{Message: "there is no Wild Draw Four to resolve"}
+	}
+	if pending.victimID != playerID {
+		return ErrIllegalMove{Message: "only the affected player can resolve the Wild Draw Four"}
+	}
+	g.hands[playerID] = append(g.hands[playerID], g.draw(4)...)
+	g.unoCalled[playerID] = false
+	g.wildDrawFour = nil
+	g.addLog(fmt.Sprintf("%s accepts the Wild Draw Four and draws 4", nameOf(playerID)))
+	g.turnIdx = mod(g.turnIdx+g.direction, len(g.order))
+	g.finishWildDrawFourWin(pending.offenderID)
+	return nil
+}
+
+// challengeWildDrawFour resolves the official bluff challenge. A legal play
+// costs the challenger six cards and their turn; an illegal play costs the
+// offender four cards while the challenger keeps their turn.
+func (g *gameState) challengeWildDrawFour(playerID string, nameOf func(string) string) error {
+	pending := g.wildDrawFour
+	if pending == nil {
+		return ErrIllegalMove{Message: "there is no Wild Draw Four to challenge"}
+	}
+	if pending.victimID != playerID {
+		return ErrIllegalMove{Message: "only the affected player can challenge the Wild Draw Four"}
+	}
+	g.wildDrawFour = nil
+	if pending.legal {
+		g.hands[playerID] = append(g.hands[playerID], g.draw(6)...)
+		g.unoCalled[playerID] = false
+		g.addLog(fmt.Sprintf("%s challenged unsuccessfully and draws 6", nameOf(playerID)))
+		g.turnIdx = mod(g.turnIdx+g.direction, len(g.order))
+	} else {
+		g.hands[pending.offenderID] = append(g.hands[pending.offenderID], g.draw(4)...)
+		g.unoCalled[pending.offenderID] = false
+		g.addLog(fmt.Sprintf("%s challenged successfully \u2014 %s draws 4", nameOf(playerID), nameOf(pending.offenderID)))
+	}
+	g.finishWildDrawFourWin(pending.offenderID)
+	return nil
+}
+
+func (g *gameState) finishWildDrawFourWin(offenderID string) {
+	if len(g.hands[offenderID]) == 0 {
+		g.unoCalled[offenderID] = false
+		g.winnerID = offenderID
+	}
 }
 
 // autoSkip moves the turn to the next seat with no other effect - no card

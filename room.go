@@ -56,6 +56,9 @@ type outMsg struct {
 	// pending (see gameState.drawPending) - the client shows a "play it or
 	// keep it" prompt for exactly this card.
 	YourDrawnCard *Card `json:"yourDrawnCard,omitempty"`
+	// CanChallengeWild4 is only true for the player targeted by a pending
+	// Wild Draw Four. The legality result never leaves the server.
+	CanChallengeWild4 bool `json:"canChallengeWild4,omitempty"`
 
 	// type "joined" - Token lets the client resume this identity after a
 	// drop/reload (see inMsg.Token); Resumed is true only when this
@@ -448,6 +451,16 @@ func (r *room) autoSkipDisconnected() {
 		if ok && cur.connected {
 			return
 		}
+		if g.wildDrawFour != nil && g.wildDrawFour.victimID == g.currentPlayer() {
+			// A disconnected victim cannot answer the challenge prompt.
+			// Treat that as accepting the four cards so the room can keep
+			// moving, exactly as other disconnected turns are skipped.
+			_ = g.acceptWildDrawFour(g.currentPlayer(), r.nameOf)
+			if g.winnerID != "" {
+				return
+			}
+			continue
+		}
 		g.autoSkip()
 	}
 }
@@ -526,6 +539,36 @@ func (r *room) handleAction(act roomAction) {
 			return
 		}
 		if err := r.game.passTurn(p.id); err != nil {
+			r.sendError(p, err)
+			return
+		}
+		r.afterTurnAdvance()
+
+	case "acceptWild4":
+		if r.status != "playing" || r.game == nil {
+			r.sendError(p, ErrIllegalMove{Message: "the game hasn't started"})
+			return
+		}
+		if r.connectedInGame() < 2 {
+			r.sendError(p, ErrIllegalMove{Message: "waiting for other players to reconnect"})
+			return
+		}
+		if err := r.game.acceptWildDrawFour(p.id, r.nameOf); err != nil {
+			r.sendError(p, err)
+			return
+		}
+		r.afterTurnAdvance()
+
+	case "challengeWild4":
+		if r.status != "playing" || r.game == nil {
+			r.sendError(p, ErrIllegalMove{Message: "the game hasn't started"})
+			return
+		}
+		if r.connectedInGame() < 2 {
+			r.sendError(p, ErrIllegalMove{Message: "waiting for other players to reconnect"})
+			return
+		}
+		if err := r.game.challengeWildDrawFour(p.id, r.nameOf); err != nil {
 			r.sendError(p, err)
 			return
 		}
@@ -614,6 +657,8 @@ func (r *room) stateFor(id string, gamePlayers []gamePlayerView, top Card, logCo
 		DeckCount:       len(g.deck),
 		Log:             logCopy,
 		YourDrawnCard:   yourDrawn,
+		CanChallengeWild4: g.wildDrawFour != nil &&
+			g.wildDrawFour.victimID == id,
 	}
 }
 
