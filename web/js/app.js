@@ -30,6 +30,8 @@ const HAND_SIDE_PADDING = 24;
  * @property {string} name
  * @property {number} handCount
  * @property {boolean} isCurrentTurn
+ * @property {boolean} unoCalled
+ * @property {boolean} unoCatchable
  * @property {boolean} connected
  */
 
@@ -741,7 +743,9 @@ document.addEventListener('alpine:init', () => {
      * @returns {boolean}
      */
     canCallUno() {
-      return this.hand.length <= 2 && this.hand.length > 0 && !this.myUnoCalled();
+      const me = this.gamePlayers.find(p => p.id === this.selfId);
+      if (!me || me.unoCalled) return false;
+      return (this.yourTurn && this.hand.length === 2) || (this.hand.length === 1 && me.unoCatchable);
     },
 
     /** @returns {boolean} */
@@ -761,7 +765,7 @@ document.addEventListener('alpine:init', () => {
      * @returns {boolean} true if `p` can be caught out for not calling UNO
      */
     isCatchable(p) {
-      return p.id !== this.selfId && p.handCount === 1 && !p.unoCalled;
+      return p.id !== this.selfId && p.unoCatchable;
     },
 
     /**

@@ -92,10 +92,12 @@ type gameState struct {
 	winnerID string
 
 	// unoCalled tracks, per player, whether they've called "UNO" since last
-	// dropping to exactly one card. Only meaningful while a player's hand
-	// size is 1 - reset to false the moment they land on one card, and
-	// irrelevant (ignored) at any other hand size.
+	// dropping to exactly one card. A true value at two cards means the
+	// current player called while playing their penultimate card.
 	unoCalled map[string]bool
+	// unoCatchableID is the player who just reached one card without calling.
+	// The window closes as soon as the next player successfully plays or draws.
+	unoCatchableID string
 
 	// drawPending is true from the moment the current player draws a card
 	// until they either play it (or any other card) or explicitly pass -
@@ -220,6 +222,8 @@ func (g *gameState) playCard(playerID, cardID, chosenColor string, nameOf func(s
 			return false, "pick a color for the wild card"
 		}
 	}
+	calledBeforePlay := g.unoCalled[playerID]
+	g.closeUnoCatchWindow()
 
 	// Remove from hand, place on discard.
 	g.hands[playerID] = append(hand[:idx], hand[idx+1:]...)
@@ -250,11 +254,13 @@ func (g *gameState) playCard(playerID, cardID, chosenColor string, nameOf func(s
 	case "draw2":
 		victim := g.order[mod(g.turnIdx+g.direction, n)]
 		g.hands[victim] = append(g.hands[victim], g.draw(2)...)
+		g.unoCalled[victim] = false
 		skip = 1
 		logLine += fmt.Sprintf(" \u2014 %s draws 2", nameOf(victim))
 	case "wild4":
 		victim := g.order[mod(g.turnIdx+g.direction, n)]
 		g.hands[victim] = append(g.hands[victim], g.draw(4)...)
+		g.unoCalled[victim] = false
 		skip = 1
 		logLine += fmt.Sprintf(" \u2014 %s draws 4", nameOf(victim))
 	case "colorbomb":
@@ -275,10 +281,16 @@ func (g *gameState) playCard(playerID, cardID, chosenColor string, nameOf func(s
 	g.addLog(logLine)
 
 	if len(g.hands[playerID]) == 0 {
+		g.unoCalled[playerID] = false
 		g.winnerID = playerID
 		return true, ""
 	}
 	if len(g.hands[playerID]) == 1 {
+		g.unoCalled[playerID] = calledBeforePlay
+		if !calledBeforePlay {
+			g.unoCatchableID = playerID
+		}
+	} else {
 		g.unoCalled[playerID] = false
 	}
 
@@ -304,7 +316,9 @@ func (g *gameState) drawCard(playerID string, nameOf func(string) string) (drawn
 		return Card{}, false, "no cards left to draw"
 	}
 	card := cards[0]
+	g.closeUnoCatchWindow()
 	g.hands[playerID] = append(g.hands[playerID], card)
+	g.unoCalled[playerID] = false
 	g.drawPending = true
 	g.lastDrawnCard = &card
 	g.addLog(fmt.Sprintf("%s drew a card", nameOf(playerID)))
@@ -334,42 +348,63 @@ func (g *gameState) passTurn(playerID string) (ok bool, errMsg string) {
 func (g *gameState) autoSkip() {
 	g.drawPending = false
 	g.lastDrawnCard = nil
+	g.unoCalled[g.currentPlayer()] = false
 	g.turnIdx = mod(g.turnIdx+g.direction, len(g.order))
 }
 
-// callUno lets a player declare UNO once they're down to one or two cards
-// (the latter covers calling right before playing their second-to-last
-// card, which is how it's usually done at the table).
+// callUno lets the current player call while holding two cards, immediately
+// before playing their penultimate card. A player who has just reached one
+// card can also call during the catch window, until another card action wins
+// the race and closes that window.
 func (g *gameState) callUno(playerID string, nameOf func(string) string) (ok bool, errMsg string) {
 	hand, ok := g.hands[playerID]
 	if !ok {
 		return false, "you're not in this game"
 	}
-	if len(hand) > 2 {
+	if g.unoCalled[playerID] {
+		return false, "you already called UNO"
+	}
+	if len(hand) == 2 && g.currentPlayer() != playerID {
+		return false, "call UNO when you play your second-to-last card"
+	}
+	if len(hand) != 2 && !(len(hand) == 1 && g.unoCatchableID == playerID) {
 		return false, "you don't need to call UNO yet"
 	}
 	g.unoCalled[playerID] = true
+	if g.unoCatchableID == playerID {
+		g.unoCatchableID = ""
+	}
 	g.addLog(fmt.Sprintf("%s called UNO!", nameOf(playerID)))
 	return true, ""
 }
 
-// catchUno lets any player call out someone sitting on exactly one card who
-// hasn't declared UNO, penalizing them two cards.
-func (g *gameState) catchUno(targetID string, nameOf func(string) string) (ok bool, errMsg string) {
+// catchUno lets another player call out the one player whose catch window is
+// currently open, penalizing them two cards.
+func (g *gameState) catchUno(catcherID, targetID string, nameOf func(string) string) (ok bool, errMsg string) {
 	hand, ok := g.hands[targetID]
 	if !ok {
 		return false, "that player isn't in this game"
 	}
-	if len(hand) != 1 {
+	if catcherID == targetID {
+		return false, "you can't catch yourself"
+	}
+	if len(hand) != 1 || g.unoCatchableID != targetID {
 		return false, "that player doesn't need to call UNO"
 	}
 	if g.unoCalled[targetID] {
 		return false, "they already called UNO"
 	}
 	g.hands[targetID] = append(g.hands[targetID], g.draw(2)...)
-	g.unoCalled[targetID] = true // safe now - they've paid the penalty
+	g.unoCalled[targetID] = false
+	g.unoCatchableID = ""
 	g.addLog(fmt.Sprintf("%s got caught without calling UNO - draws 2", nameOf(targetID)))
 	return true, ""
+}
+
+func (g *gameState) closeUnoCatchWindow() {
+	if g.unoCatchableID != "" {
+		g.unoCatchableID = ""
+	}
 }
 
 func (g *gameState) reshuffle() {

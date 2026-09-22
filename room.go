@@ -84,6 +84,7 @@ type gamePlayerView struct {
 	HandCount     int    `json:"handCount"`
 	IsCurrentTurn bool   `json:"isCurrentTurn"`
 	UnoCalled     bool   `json:"unoCalled"`
+	UnoCatchable  bool   `json:"unoCatchable"`
 	Connected     bool   `json:"connected"`
 }
 
@@ -488,7 +489,7 @@ func (r *room) handleAction(act roomAction) {
 			p.send <- outMsg{Type: "error", Message: "the game hasn't started"}
 			return
 		}
-		ok, errMsg := r.game.catchUno(act.msg.TargetID, r.nameOf)
+		ok, errMsg := r.game.catchUno(p.id, act.msg.TargetID, r.nameOf)
 		if !ok {
 			p.send <- outMsg{Type: "error", Message: errMsg}
 			return
@@ -564,6 +565,7 @@ func (r *room) gamePlayerViews() []gamePlayerView {
 			HandCount:     len(g.hands[id]),
 			IsCurrentTurn: id == g.currentPlayer(),
 			UnoCalled:     g.unoCalled[id],
+			UnoCatchable:  g.unoCatchableID == id,
 			Connected:     r.players[id] != nil && r.players[id].connected,
 		})
 	}

@@ -241,36 +241,57 @@ func TestPlayCard(t *testing.T) {
 		assert.Equal(t, "p1", g.winnerID)
 	})
 
-	t.Run("dropping to one card clears any stale UNO call", func(t *testing.T) {
+	t.Run("dropping to one card preserves a call made before the play", func(t *testing.T) {
 		g := newTestGame([]Card{{ID: "c1", Color: "red", Value: "3"}, filler})
-		g.unoCalled["p1"] = true // stale from a previous hand
+		g.unoCalled["p1"] = true
 		ok, _ := g.playCard("p1", "c1", "", nameOfStub)
 		require.True(t, ok)
 		require.Len(t, g.hands["p1"], 1)
+		assert.True(t, g.unoCalled["p1"])
+		assert.Empty(t, g.unoCatchableID)
+	})
+
+	t.Run("dropping to one card without calling opens the catch window", func(t *testing.T) {
+		g := newTestGame([]Card{{ID: "c1", Color: "red", Value: "3"}, filler})
+		ok, _ := g.playCard("p1", "c1", "", nameOfStub)
+		require.True(t, ok)
 		assert.False(t, g.unoCalled["p1"])
+		assert.Equal(t, "p1", g.unoCatchableID)
 	})
 }
 
 func TestCallUno(t *testing.T) {
-	tests := []struct {
-		name    string
-		hand    []Card
-		wantOK  bool
-		wantErr string
-	}{
-		{"can call with one card", []Card{{ID: "c1"}}, true, ""},
-		{"can call with two cards", []Card{{ID: "c1"}, {ID: "c2"}}, true, ""},
-		{"cannot call with three or more cards", []Card{{ID: "c1"}, {ID: "c2"}, {ID: "c3"}}, false, "you don't need to call UNO yet"},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			g := newTestGame(tt.hand)
-			ok, errMsg := g.callUno("p1", nameOfStub)
-			assert.Equal(t, tt.wantOK, ok)
-			assert.Equal(t, tt.wantErr, errMsg)
-			assert.Equal(t, tt.wantOK, g.unoCalled["p1"])
-		})
-	}
+	t.Run("can call with two cards before playing", func(t *testing.T) {
+		g := newTestGame([]Card{{ID: "c1"}, {ID: "c2"}})
+		ok, errMsg := g.callUno("p1", nameOfStub)
+		require.True(t, ok)
+		assert.Empty(t, errMsg)
+		assert.True(t, g.unoCalled["p1"])
+	})
+
+	t.Run("can call with one card during the catch window", func(t *testing.T) {
+		g := newTestGame([]Card{{ID: "c1"}})
+		g.unoCatchableID = "p1"
+		ok, errMsg := g.callUno("p1", nameOfStub)
+		require.True(t, ok)
+		assert.Empty(t, errMsg)
+		assert.True(t, g.unoCalled["p1"])
+		assert.Empty(t, g.unoCatchableID)
+	})
+
+	t.Run("cannot call with one card after the window closes", func(t *testing.T) {
+		g := newTestGame([]Card{{ID: "c1"}})
+		ok, errMsg := g.callUno("p1", nameOfStub)
+		assert.False(t, ok)
+		assert.Equal(t, "you don't need to call UNO yet", errMsg)
+	})
+
+	t.Run("cannot call with three or more cards", func(t *testing.T) {
+		g := newTestGame([]Card{{ID: "c1"}, {ID: "c2"}, {ID: "c3"}})
+		ok, errMsg := g.callUno("p1", nameOfStub)
+		assert.False(t, ok)
+		assert.Equal(t, "you don't need to call UNO yet", errMsg)
+	})
 
 	t.Run("rejects a player who isn't in the game", func(t *testing.T) {
 		g := newTestGame([]Card{{ID: "c1"}})
@@ -283,17 +304,19 @@ func TestCallUno(t *testing.T) {
 func TestCatchUno(t *testing.T) {
 	t.Run("penalizes a player sitting on one card who hasn't called", func(t *testing.T) {
 		g := newTestGame([]Card{{ID: "c1"}})
-		ok, errMsg := g.catchUno("p1", nameOfStub)
+		g.unoCatchableID = "p1"
+		ok, errMsg := g.catchUno("p2", "p1", nameOfStub)
 		require.True(t, ok)
 		assert.Empty(t, errMsg)
 		assert.Len(t, g.hands["p1"], 3) // 1 + 2 penalty cards
-		assert.True(t, g.unoCalled["p1"], "safe after paying the penalty")
+		assert.Empty(t, g.unoCatchableID)
 	})
 
 	t.Run("rejects catching someone who already called UNO", func(t *testing.T) {
 		g := newTestGame([]Card{{ID: "c1"}})
 		g.unoCalled["p1"] = true
-		ok, errMsg := g.catchUno("p1", nameOfStub)
+		g.unoCatchableID = "p1"
+		ok, errMsg := g.catchUno("p2", "p1", nameOfStub)
 		assert.False(t, ok)
 		assert.Equal(t, "they already called UNO", errMsg)
 		assert.Len(t, g.hands["p1"], 1, "no penalty applied")
@@ -301,20 +324,42 @@ func TestCatchUno(t *testing.T) {
 
 	t.Run("rejects catching a player who doesn't have exactly one card", func(t *testing.T) {
 		g := newTestGame([]Card{{ID: "c1"}, {ID: "c2"}})
-		ok, errMsg := g.catchUno("p1", nameOfStub)
+		ok, errMsg := g.catchUno("p2", "p1", nameOfStub)
 		assert.False(t, ok)
 		assert.Equal(t, "that player doesn't need to call UNO", errMsg)
 	})
 
 	t.Run("rejects a target who isn't in the game", func(t *testing.T) {
 		g := newTestGame([]Card{{ID: "c1"}})
-		ok, errMsg := g.catchUno("ghost", nameOfStub)
+		ok, errMsg := g.catchUno("p2", "ghost", nameOfStub)
 		assert.False(t, ok)
 		assert.Equal(t, "that player isn't in this game", errMsg)
+	})
+
+	t.Run("rejects catching yourself", func(t *testing.T) {
+		g := newTestGame([]Card{{ID: "c1"}})
+		g.unoCatchableID = "p1"
+		ok, errMsg := g.catchUno("p1", "p1", nameOfStub)
+		assert.False(t, ok)
+		assert.Equal(t, "you can't catch yourself", errMsg)
 	})
 }
 
 func TestDrawCard(t *testing.T) {
+	t.Run("the next player's draw closes the UNO catch window", func(t *testing.T) {
+		g := newTestGame([]Card{
+			{ID: "c1", Color: "red", Value: "3"},
+			{ID: "c2", Color: "blue", Value: "4"},
+		})
+		ok, _ := g.playCard("p1", "c1", "", nameOfStub)
+		require.True(t, ok)
+		require.Equal(t, "p1", g.unoCatchableID)
+
+		_, ok, errMsg := g.drawCard("p2", nameOfStub)
+		require.True(t, ok, errMsg)
+		assert.Empty(t, g.unoCatchableID)
+	})
+
 	t.Run("rejects when it's not your turn", func(t *testing.T) {
 		g := newTestGame([]Card{{ID: "c1", Color: "red", Value: "3"}})
 		_, ok, errMsg := g.drawCard("p2", nameOfStub)
