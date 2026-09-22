@@ -40,6 +40,11 @@ type ErrGameInProgress struct{}
 func (ErrGameInProgress) Error() string      { return "this game has already started" }
 func (ErrGameInProgress) ClientCode() string { return "game_in_progress" }
 
+type ErrNameTaken struct{}
+
+func (ErrNameTaken) Error() string      { return "someone in this room already has that name" }
+func (ErrNameTaken) ClientCode() string { return "name_taken" }
+
 func clientErrorDetails(err error) (code, message string) {
 	if clientErr, ok := errors.AsType[clientError](err); ok {
 		return clientErr.ClientCode(), clientErr.Error()

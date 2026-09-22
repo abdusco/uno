@@ -318,6 +318,16 @@ func (r *room) handleJoin(req *joinReq) {
 		req.result <- &joinResult{err: ErrRoomFull{}}
 		return
 	}
+	// Case-insensitive: distinct capitalization of the same name is still
+	// confusing at the table and in the activity log. Compares against every
+	// seat, connected or not, since a disconnected player's name is still
+	// reserved for their eventual reconnect.
+	for _, existing := range r.players {
+		if strings.EqualFold(strings.TrimSpace(existing.name), strings.TrimSpace(req.name)) {
+			req.result <- &joinResult{err: ErrNameTaken{}}
+			return
+		}
+	}
 	// If nobody currently connected is host - a brand new room, or one
 	// where the host disconnected and never made it back - the next person
 	// in gets promoted, so the room is never stuck hostless.
