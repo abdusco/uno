@@ -238,6 +238,10 @@ func TestAutoSkipDisconnected(t *testing.T) {
 		carol := joinRoom(t, r, "Carol")
 		r.status = "playing"
 		r.game = startGame([]string{alice.player.id, bob.player.id, carol.player.id}, r.nameOf)
+		// The opening card can be a skip/reverse/draw2, which shifts who
+		// actually goes first - normalize both so this test's outcome
+		// doesn't depend on the random deck.
+		r.game.turnIdx, r.game.direction = 0, 1
 		require.Equal(t, alice.player.id, r.game.currentPlayer())
 
 		leave(t, r, alice)
@@ -256,6 +260,9 @@ func TestAutoSkipDisconnected(t *testing.T) {
 		dave := joinRoom(t, r, "Dave")
 		r.status = "playing"
 		r.game = startGame([]string{alice.player.id, bob.player.id, carol.player.id, dave.player.id}, r.nameOf)
+		// Normalize away the random opening card's effect on turn order -
+		// see the previous subtest.
+		r.game.turnIdx, r.game.direction = 0, 1
 		require.Equal(t, alice.player.id, r.game.currentPlayer())
 
 		leave(t, r, bob) // disconnect the next-in-line seat first
@@ -271,6 +278,11 @@ func TestAutoSkipDisconnected(t *testing.T) {
 		carol := joinRoom(t, r, "Carol")
 		r.status = "playing"
 		r.game = startGame([]string{alice.player.id, bob.player.id, carol.player.id}, r.nameOf)
+		// Normalize away the random opening card's effect on turn order (see
+		// the earlier subtests) - this test disconnects bob and carol
+		// specifically, so it needs alice, not whoever the deck happened to
+		// pick, to be the one left holding the turn.
+		r.game.turnIdx, r.game.direction = 0, 1
 		turnBefore := r.game.currentPlayer()
 
 		leave(t, r, bob)
