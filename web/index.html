@@ -1,0 +1,128 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Uno Party</title>
+
+  <link rel="manifest" href="/manifest.json">
+  <meta name="theme-color" content="#dc2626">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <link rel="apple-touch-icon" href="/icons/apple-touch-icon.png">
+  <link rel="icon" href="/icons/icon-192.png">
+
+  <link rel="stylesheet" href="/css/style.css">
+</head>
+<body>
+
+  <main id="app" x-data="unoParty" x-init="init()" x-cloak>
+
+    <!-- connecting overlay -->
+    <div class="overlay" x-show="status === 'connecting'" x-cloak>
+      <p>Connecting…</p>
+    </div>
+
+    <div class="overlay overlay--error" x-show="status === 'disconnected'" x-cloak>
+      <p>Connection lost.</p>
+      <button class="btn" @click="location.reload()">Reload</button>
+    </div>
+
+    <!-- screen 1: ask for a name -->
+    <section class="screen" x-show="screen === 'name'" x-cloak>
+      <div class="card">
+        <h1>🎴 Uno Party</h1>
+        <p class="subtitle" x-show="joiningRoom" x-text="`Joining room ${joiningRoom}`"></p>
+        <form @submit.prevent="submitName()">
+          <label class="field">
+            <span>Your name</span>
+            <input type="text" x-model="name" maxlength="20" autocomplete="off"
+                   placeholder="e.g. Alex" required x-ref="nameInput">
+          </label>
+
+          <button class="btn btn--primary" type="submit" :disabled="!name.trim()">
+            <span x-show="!joiningRoom">Create room</span>
+            <span x-show="joiningRoom">Join room</span>
+          </button>
+        </form>
+
+        <template x-if="!joiningRoom">
+          <div class="or-join">
+            <span class="or-divider">or</span>
+            <form @submit.prevent="submitJoinCode()">
+              <label class="field">
+                <span>Have a code?</span>
+                <input type="text" x-model="joinCode" maxlength="5" autocomplete="off"
+                       placeholder="ABCDE" style="text-transform:uppercase">
+              </label>
+              <button class="btn" type="submit" :disabled="!name.trim() || !joinCode.trim()">
+                Join with code
+              </button>
+            </form>
+          </div>
+        </template>
+
+        <p class="error" x-show="errorMsg" x-text="errorMsg"></p>
+      </div>
+    </section>
+
+    <!-- screen 2: lobby -->
+    <section class="screen" x-show="screen === 'lobby'" x-cloak>
+      <div class="card">
+        <h1>Room <span class="room-code" x-text="roomId"></span></h1>
+
+        <div class="share-box">
+          <input type="text" readonly :value="shareLink" @click="$event.target.select()">
+          <button class="btn" @click="copyLink()" x-text="copied ? 'Copied!' : 'Copy link'"></button>
+        </div>
+        <p class="hint">Send that link to friends so they can join.</p>
+
+        <h2>Players (<span x-text="players.length"></span>)</h2>
+        <ul class="players">
+          <template x-for="p in players" :key="p.id">
+            <li>
+              <span x-text="p.name"></span>
+              <span class="badge" x-show="p.isHost">host</span>
+              <span class="you" x-show="p.id === selfId">(you)</span>
+            </li>
+          </template>
+        </ul>
+
+        <button class="btn btn--primary" x-show="isHost"
+                @click="startGame()" :disabled="players.length < 2">
+          Start game
+        </button>
+        <p class="hint" x-show="isHost && players.length < 2">Waiting for at least one more player…</p>
+        <p class="hint" x-show="!isHost">Waiting for the host to start the game…</p>
+
+        <p class="error" x-show="errorMsg" x-text="errorMsg"></p>
+      </div>
+    </section>
+
+    <!-- screen 3: game (stub - card logic goes here) -->
+    <section class="screen" x-show="screen === 'game'" x-cloak>
+      <div class="card">
+        <h1>🎴 Game on!</h1>
+        <p>Everyone's in. This is where the UNO table goes.</p>
+        <ul class="players">
+          <template x-for="p in players" :key="p.id">
+            <li>
+              <span x-text="p.name"></span>
+              <span class="you" x-show="p.id === selfId">(you)</span>
+            </li>
+          </template>
+        </ul>
+      </div>
+    </section>
+
+  </main>
+
+  <!-- app.js must load before Alpine: Alpine.start() fires from a
+       microtask queued the instant its own deferred script runs, which
+       is before the *next* deferred script gets a turn - so our
+       alpine:init listener has to already be registered by then. -->
+  <script src="/js/app.js" defer></script>
+  <script src="/vendor/alpine.min.js" defer></script>
+</body>
+</html>
