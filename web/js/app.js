@@ -369,10 +369,12 @@ document.addEventListener('alpine:init', () => {
         case 'started':
           this.gameOver = null;
           this.screen = 'game';
+          this.startMusic();
           break;
         case 'state':
           const previousDiscardId = this.lastDiscardCardId;
           const previousDeckCount = this.deckCount;
+          const previousGamePlayers = this.gamePlayers;
           this.hand = msg.hand || [];
           this.discardTop = msg.discardTop || null;
           this.topColor = msg.topColor || '';
@@ -391,6 +393,15 @@ document.addEventListener('alpine:init', () => {
           } else if (previousDeckCount && this.deckCount < previousDeckCount) {
             this.playCardSfx('draw');
           }
+          // UNO calls arrive as state transitions rather than standalone
+          // events. Ignore the first snapshot after joining/reconnecting, then
+          // sound the call when any player changes from not-called to called.
+          if (previousGamePlayers.length && this.gamePlayers.some(player => {
+            const previous = previousGamePlayers.find(candidate => candidate.id === player.id);
+            return player.unoCalled && previous && !previous.unoCalled;
+          })) {
+            this.playUnoSfx();
+          }
           // A resumed mid-game player gets here via "joined" + an
           // immediate personalized "state", never a fresh "started".
           this.screen = 'game';
@@ -398,6 +409,10 @@ document.addEventListener('alpine:init', () => {
         case 'gameOver':
           this.gameOver = { winnerId: msg.winnerId, winnerName: msg.winnerName };
           this.pendingWildCard = null;
+          if (msg.winnerId === this.selfId) {
+            this.stopMusic();
+            this.playTriumphSfx();
+          }
           break;
         case 'error':
           this.errorMsg = msg.message || 'Something went wrong.';
@@ -531,6 +546,46 @@ document.addEventListener('alpine:init', () => {
       oscillator.connect(gain).connect(this.audioContext.destination);
       oscillator.start(now);
       oscillator.stop(now + .14);
+    },
+
+    /** @returns {void} */
+    playUnoSfx() {
+      if (!this.audioContext || this.audioContext.state !== 'running') return;
+      const now = this.audioContext.currentTime;
+      [523.25, 783.99].forEach((frequency, index) => {
+        const oscillator = this.audioContext.createOscillator();
+        const gain = this.audioContext.createGain();
+        const start = now + index * .09;
+        oscillator.type = 'square';
+        oscillator.frequency.value = frequency;
+        gain.gain.setValueAtTime(.0001, start);
+        gain.gain.exponentialRampToValueAtTime(.045, start + .012);
+        gain.gain.exponentialRampToValueAtTime(.0001, start + .12);
+        oscillator.connect(gain).connect(this.audioContext.destination);
+        oscillator.start(start);
+        oscillator.stop(start + .13);
+      });
+    },
+
+    /** @returns {void} */
+    playTriumphSfx() {
+      if (!this.prepareAudio() || this.audioContext.state !== 'running') return;
+      const now = this.audioContext.currentTime;
+      const notes = [523.25, 659.25, 783.99, 1046.5];
+      notes.forEach((frequency, index) => {
+        const oscillator = this.audioContext.createOscillator();
+        const gain = this.audioContext.createGain();
+        const start = now + index * .14;
+        const duration = index === notes.length - 1 ? .5 : .2;
+        oscillator.type = index === notes.length - 1 ? 'triangle' : 'square';
+        oscillator.frequency.value = frequency;
+        gain.gain.setValueAtTime(.0001, start);
+        gain.gain.exponentialRampToValueAtTime(.055, start + .018);
+        gain.gain.exponentialRampToValueAtTime(.0001, start + duration);
+        oscillator.connect(gain).connect(this.audioContext.destination);
+        oscillator.start(start);
+        oscillator.stop(start + duration + .01);
+      });
     },
 
     /**
@@ -758,6 +813,7 @@ document.addEventListener('alpine:init', () => {
     /** @returns {void} */
     callUno() {
       if (!this.ws) return;
+      this.prepareAudio();
       this.ws.send(JSON.stringify({ type: 'callUno' }));
     },
 
@@ -776,6 +832,12 @@ document.addEventListener('alpine:init', () => {
     catchUno(targetId) {
       if (!this.ws) return;
       this.ws.send(JSON.stringify({ type: 'catchUno', targetId }));
+    },
+
+    /** @returns {string} */
+    gameOverMessage() {
+      if (!this.gameOver) return '';
+      return this.gameOver.winnerId === this.selfId ? 'You win!' : `${this.gameOver.winnerName} wins!`;
     },
 
     /** @returns {void} */

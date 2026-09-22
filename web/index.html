@@ -210,7 +210,7 @@
 
       <!-- game over banner -->
       <div class="overlay" x-show="gameOver" x-cloak>
-        <p class="game-over__title">🎉 <span x-text="gameOver && gameOver.winnerName"></span> wins!</p>
+        <p class="game-over__title">🎉 <span x-text="gameOverMessage()"></span></p>
         <button class="btn btn--primary" @click="backToLobby()">Back to lobby</button>
       </div>
     </section>
