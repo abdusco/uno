@@ -340,12 +340,15 @@ func (r *room) handleLeave(lr leaveReq) {
 		}
 	}
 
+	// Keep lobby metadata (especially host ownership) current even while the
+	// game screen is showing. Clients retain this snapshot for the rematch
+	// lobby, and use it to update their local isHost flag immediately.
+	r.broadcastPlayers()
 	if r.status == "playing" && r.game != nil {
 		r.autoSkipDisconnected()
 		r.broadcastState()
 		return
 	}
-	r.broadcastPlayers()
 }
 
 // connectedInGame counts how many of the current game's players still have

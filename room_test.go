@@ -43,6 +43,21 @@ func syncRoom(t *testing.T, r *room) {
 	<-done
 }
 
+func drainMessages(ch chan outMsg) []outMsg {
+	var messages []outMsg
+	for {
+		select {
+		case msg, ok := <-ch:
+			if !ok {
+				return messages
+			}
+			messages = append(messages, msg)
+		default:
+			return messages
+		}
+	}
+}
+
 func TestHandleJoinHostPromotion(t *testing.T) {
 	t.Run("first joiner becomes host even though asHost is false", func(t *testing.T) {
 		r := newRoom("TEST1", "Test Room")
@@ -78,6 +93,30 @@ func TestHandleJoinHostPromotion(t *testing.T) {
 		resumed := reconnectRoom(t, r, alice.player.token)
 		assert.False(t, resumed.player.isHost, "the promoted host keeps the role on the original host's return")
 		assert.True(t, bob.player.isHost)
+	})
+
+	t.Run("promoted host is announced during a game", func(t *testing.T) {
+		r := newRoom("TEST5", "Test Room")
+		alice := joinRoom(t, r, "Alice")
+		bob := joinRoom(t, r, "Bob")
+		r.status = "playing"
+		r.game = startGame([]string{alice.player.id, bob.player.id}, r.nameOf)
+		drainMessages(bob.sendCh)
+
+		leave(t, r, alice)
+
+		var promoted bool
+		for _, msg := range drainMessages(bob.sendCh) {
+			if msg.Type != "players" {
+				continue
+			}
+			for _, player := range msg.Players {
+				if player.ID == bob.player.id && player.IsHost {
+					promoted = true
+				}
+			}
+		}
+		assert.True(t, promoted, "the promoted client must learn it can start the rematch")
 	})
 }
 
