@@ -1,4 +1,4 @@
-const CACHE_NAME = 'uno-party-v25';
+const CACHE_NAME = 'uno-party-v26';
 const SHELL_ASSETS = [
   '/',
   '/index.html',
@@ -29,11 +29,13 @@ self.addEventListener('install', (event) => {
  */
 self.addEventListener('activate', (event) => {
   event.waitUntil(
-    caches.keys().then((keys) =>
-      Promise.all(keys.filter((k) => k !== CACHE_NAME).map((k) => caches.delete(k)))
-    )
+    Promise.all([
+      caches.keys().then((keys) =>
+        Promise.all(keys.filter((k) => k !== CACHE_NAME).map((k) => caches.delete(k)))
+      ),
+      self.clients.claim(),
+    ])
   );
-  self.clients.claim();
 });
 
 /**
@@ -47,12 +49,26 @@ self.addEventListener('fetch', (event) => {
   if (request.url.startsWith('ws:') || request.url.startsWith('wss:')) return;
   if (request.method !== 'GET') return;
 
-  const url = new URL(request.url);
-
-  // Room links like /r/ABCDE aren't real files - always resolve them to
-  // the cached app shell so client-side routing can take over.
-  if (url.pathname.startsWith('/r/')) {
-    event.respondWith(caches.match('/index.html'));
+  // Always ask the server for page navigations first. It already maps room
+  // URLs such as /r/ABCDE to the app shell, and using the network prevents a
+  // missing or stale cache entry from turning a valid invite into ERR_FAILED.
+  // The cached shell is only an offline fallback.
+  if (request.mode === 'navigate') {
+    event.respondWith(
+      fetch(request)
+        .then(async (response) => {
+          if (response.ok) {
+            const copy = response.clone();
+            const cache = await caches.open(CACHE_NAME);
+            await cache.put('/index.html', copy);
+          }
+          return response;
+        })
+        .catch(async () => {
+          const cached = await caches.match('/index.html');
+          return cached || Response.error();
+        })
+    );
     return;
   }
 
