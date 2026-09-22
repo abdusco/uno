@@ -104,7 +104,14 @@
       <div class="game-screen">
 
         <header class="game-header">
-          <span class="room-chip" x-text="`Room ${roomId}`"></span>
+          <div class="game-header__topline">
+            <span class="room-chip" x-text="`Room ${roomId}`"></span>
+            <button class="music-toggle" type="button" @click="toggleMusic()"
+                    :aria-pressed="musicEnabled" :title="musicEnabled ? 'Turn music off' : 'Turn music on'">
+              <span aria-hidden="true" x-text="musicEnabled ? '♫' : '♩' "></span>
+              <span x-text="musicEnabled ? 'Music on' : 'Music off'"></span>
+            </button>
+          </div>
           <p class="turn-banner" :class="{ 'turn-banner--you': yourTurn && !waitingForReconnect() }"
              x-text="waitingForReconnect() ? 'Game paused - waiting for players to reconnect…' : (yourTurn ? 'Your turn!' : `Waiting for ${gamePlayers.find(p => p.id === currentPlayerId)?.name || '…'}…`)"></p>
         </header>

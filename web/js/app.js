@@ -141,12 +141,28 @@ document.addEventListener('alpine:init', () => {
     // phone rotating, or a desktop window being narrowed.
     viewportWidth: window.innerWidth,
 
+    // Background music is synthesized locally with the Web Audio API. It
+    // avoids shipping a large audio file and begins only after a user action,
+    // which also respects browser autoplay rules.
+    musicEnabled: true,
+    /** @type {AudioContext|null} */
+    audioContext: null,
+    /** @type {number|null} */
+    musicTimer: null,
+    musicStep: 0,
+    lastDiscardCardId: '',
+
     /** @returns {void} */
     init() {
       window.addEventListener('resize', () => {
         this.viewportWidth = window.innerWidth;
       });
       this.registerServiceWorker();
+      try {
+        this.musicEnabled = localStorage.getItem('uno:music') !== 'off';
+      } catch {
+        // Keep the default on if storage is unavailable.
+      }
       const match = window.location.pathname.match(/^\/r\/([A-Za-z0-9]{4,8})$/);
       if (match) {
         this.joiningRoom = match[1].toUpperCase();
@@ -349,6 +365,8 @@ document.addEventListener('alpine:init', () => {
           this.screen = 'game';
           break;
         case 'state':
+          const previousDiscardId = this.lastDiscardCardId;
+          const previousDeckCount = this.deckCount;
           this.hand = msg.hand || [];
           this.discardTop = msg.discardTop || null;
           this.topColor = msg.topColor || '';
@@ -358,6 +376,15 @@ document.addEventListener('alpine:init', () => {
           this.deckCount = msg.deckCount || 0;
           this.log = msg.log || [];
           this.yourDrawnCard = msg.yourDrawnCard || null;
+          this.lastDiscardCardId = this.discardTop ? this.discardTop.id : '';
+          // Ignore the first state snapshot; after that, these differences
+          // correspond to a card landing on the discard pile or leaving the
+          // deck, regardless of which player made the move.
+          if (previousDiscardId && this.lastDiscardCardId !== previousDiscardId) {
+            this.playCardSfx('play');
+          } else if (previousDeckCount && this.deckCount < previousDeckCount) {
+            this.playCardSfx('draw');
+          }
           // A resumed mid-game player gets here via "joined" + an
           // immediate personalized "state", never a fresh "started".
           this.screen = 'game';
@@ -381,7 +408,92 @@ document.addEventListener('alpine:init', () => {
     /** @returns {void} */
     startGame() {
       if (!this.ws) return;
+      this.startMusic();
       this.ws.send(JSON.stringify({ type: 'start' }));
+    },
+
+    /** @returns {void} */
+    toggleMusic() {
+      this.musicEnabled = !this.musicEnabled;
+      try {
+        localStorage.setItem('uno:music', this.musicEnabled ? 'on' : 'off');
+      } catch {
+        // The preference is optional; the current-session setting still works.
+      }
+      if (this.musicEnabled) this.startMusic();
+      else this.stopMusic();
+    },
+
+    /** @returns {void} */
+    startMusic() {
+      if (!this.musicEnabled || this.musicTimer !== null) return;
+      if (!this.prepareAudio()) return;
+      this.playMusicStep();
+      this.musicTimer = window.setInterval(() => this.playMusicStep(), 250);
+    },
+
+    /**
+     * Create or resume the shared audio context. Call this directly from a
+     * click-driven game action so later websocket-driven opponent effects can
+     * play too without running afoul of autoplay restrictions.
+     * @returns {boolean}
+     */
+    prepareAudio() {
+      const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+      if (!AudioContextClass) return false;
+      this.audioContext ||= new AudioContextClass();
+      this.audioContext.resume().catch(() => {
+        // A later user gesture will resume it if this one was too early.
+      });
+      return true;
+    },
+
+    /** @returns {void} */
+    stopMusic() {
+      if (this.musicTimer === null) return;
+      clearInterval(this.musicTimer);
+      this.musicTimer = null;
+    },
+
+    /** @returns {void} */
+    playMusicStep() {
+      if (!this.audioContext || this.audioContext.state !== 'running') return;
+      // A tiny major-pentatonic arpeggio: bright enough for an arcade table,
+      // deliberately quiet enough to sit behind conversation.
+      const notes = [261.63, 329.63, 392, 523.25, 392, 329.63, 293.66, 392];
+      const now = this.audioContext.currentTime;
+      const oscillator = this.audioContext.createOscillator();
+      const gain = this.audioContext.createGain();
+      oscillator.type = this.musicStep % 8 === 0 ? 'triangle' : 'sine';
+      oscillator.frequency.value = notes[this.musicStep % notes.length];
+      gain.gain.setValueAtTime(0.0001, now);
+      gain.gain.exponentialRampToValueAtTime(this.musicStep % 4 === 0 ? 0.026 : 0.014, now + 0.018);
+      gain.gain.exponentialRampToValueAtTime(0.0001, now + 0.22);
+      oscillator.connect(gain).connect(this.audioContext.destination);
+      oscillator.start(now);
+      oscillator.stop(now + 0.23);
+      this.musicStep++;
+    },
+
+    /**
+     * @param {'play'|'draw'} effect
+     * @returns {void}
+     */
+    playCardSfx(effect) {
+      if (!this.audioContext || this.audioContext.state !== 'running') return;
+      const now = this.audioContext.currentTime;
+      const oscillator = this.audioContext.createOscillator();
+      const gain = this.audioContext.createGain();
+      const isPlay = effect === 'play';
+      oscillator.type = isPlay ? 'triangle' : 'sine';
+      oscillator.frequency.setValueAtTime(isPlay ? 620 : 310, now);
+      oscillator.frequency.exponentialRampToValueAtTime(isPlay ? 220 : 560, now + .11);
+      gain.gain.setValueAtTime(.0001, now);
+      gain.gain.exponentialRampToValueAtTime(isPlay ? .042 : .028, now + .012);
+      gain.gain.exponentialRampToValueAtTime(.0001, now + .13);
+      oscillator.connect(gain).connect(this.audioContext.destination);
+      oscillator.start(now);
+      oscillator.stop(now + .14);
     },
 
     /**
@@ -546,12 +658,14 @@ document.addEventListener('alpine:init', () => {
      */
     sendPlay(cardId, color) {
       if (!this.ws) return;
+      this.prepareAudio();
       this.ws.send(JSON.stringify({ type: 'play', cardId, color }));
     },
 
     /** @returns {void} */
     drawCard() {
       if (!this.ws || !this.yourTurn || this.yourDrawnCard || this.waitingForReconnect()) return;
+      this.prepareAudio();
       this.ws.send(JSON.stringify({ type: 'draw' }));
     },
 
