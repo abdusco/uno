@@ -304,6 +304,24 @@ input[type="text"]:focus {
   background: rgba(220,38,38,.25);
 }
 
+.opponents__minihand {
+  display: inline-flex;
+  align-items: center;
+}
+
+.mini-card {
+  width: 12px;
+  height: 17px;
+  border-radius: 3px;
+  background: linear-gradient(135deg, var(--red), var(--red-dark));
+  border: 1px solid rgba(255,255,255,.8);
+  flex-shrink: 0;
+}
+
+.mini-card + .mini-card {
+  margin-left: -6px;
+}
+
 .opponents__count {
   background: rgba(255,255,255,.9);
   color: var(--text);
@@ -430,23 +448,41 @@ input[type="text"]:focus {
 .uno-card--wild { background: linear-gradient(135deg, #dc2626, #ca8a04, #16a34a, #2563eb); }
 
 .uno-card--disabled {
-  opacity: .45;
   cursor: not-allowed;
 }
 
-/* playable cards sit raised on your turn - a constant affordance rather
-   than a hover-only one, since most players are on touch devices. */
+/* Hand cards fan out on a slight arc - `--i` is each card's offset from
+   the center of the hand and `--n` the hand size (both set inline per
+   card); `--raise` (0 or 1, also inline) lifts playable cards on your
+   turn. The per-card angle and arc dip are scaled down as `--n` grows
+   (min() against a shrinking budget) so a bigger hand fans out flatter
+   instead of needing more vertical room. All of this lives in one
+   formula, rather than split between an inline style and a CSS class, so
+   the :hover/:active states below can still layer on top via ordinary CSS
+   specificity instead of fighting an inline `transform`. */
+.hand button.uno-card {
+  --i: 0;
+  --n: 1;
+  --raise: 0;
+  --angle: min(3deg, 22deg / var(--n));
+  --dip: min(1.5px, 14px / var(--n));
+  transform-origin: 50% 140%;
+  transform: rotate(calc(var(--i) * var(--angle)))
+             translateY(calc(var(--i) * var(--i) * var(--dip) - var(--raise) * 14px));
+}
+
 .hand button.uno-card:not(.uno-card--disabled) {
-  transform: translateY(-14px);
   box-shadow: 0 10px 20px rgba(0,0,0,.4);
 }
 
-.hand button.uno-card:not(.uno-card--disabled):hover {
-  transform: translateY(-20px);
+.hand button.uno-card:hover {
+  transform: rotate(calc(var(--i) * var(--angle)))
+             translateY(calc(var(--i) * var(--i) * var(--dip) - var(--raise) * 20px));
 }
 
-.hand button.uno-card:not(.uno-card--disabled):active {
-  transform: translateY(-8px) scale(.96);
+.hand button.uno-card:active {
+  transform: rotate(calc(var(--i) * var(--angle)))
+             translateY(calc(var(--i) * var(--i) * var(--dip) - var(--raise) * 8px)) scale(.96);
 }
 
 .pile--discard .uno-card {
@@ -469,9 +505,15 @@ input[type="text"]:focus {
   max-width: 100%;
   margin: 0 auto;
   overflow-x: auto;
-  /* extra top padding so playable cards can lift (translateY) without
-     being clipped by this scroll container's box. */
-  padding: 26px 6px 6px;
+  /* vertical overflow (raised/fanned cards swinging above or below their
+     own layout box) is never clipped; only sideways scrolling is - modern
+     Chrome/Firefox support this independently of overflow-x, unlike the
+     older CSS2.1 rule that forced both axes to agree. */
+  overflow-y: visible;
+  /* extra side padding so the outer fanned (rotated) cards, which swing
+     sideways beyond their own unrotated layout box, aren't clipped by
+     this scroll container's box. */
+  padding: 6px 20px;
 }
 
 .uno-fab {

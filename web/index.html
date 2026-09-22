@@ -19,14 +19,9 @@
 
   <main id="app" x-data="unoParty" x-init="init()" x-cloak :class="{ 'app--game': screen === 'game' }">
 
-    <!-- connecting overlay -->
+    <!-- connecting / auto-reconnecting overlay -->
     <div class="overlay" x-show="status === 'connecting'" x-cloak>
-      <p>Connecting…</p>
-    </div>
-
-    <div class="overlay overlay--error" x-show="status === 'disconnected'" x-cloak>
-      <p>Connection lost.</p>
-      <button class="btn" @click="location.reload()">Reload</button>
+      <p x-text="reconnectAttempts > 0 ? 'Reconnecting…' : 'Connecting…'"></p>
     </div>
 
     <!-- screen 1: ask for a name -->
@@ -114,6 +109,11 @@
           <template x-for="p in gamePlayers.filter(p => p.id !== selfId)" :key="p.id">
             <li class="opponents__item" :class="{ 'opponents__item--turn': p.isCurrentTurn }">
               <span class="opponents__name" x-text="p.name"></span>
+              <span class="opponents__minihand">
+                <template x-for="n in p.handCount" :key="n">
+                  <span class="mini-card"></span>
+                </template>
+              </span>
               <span class="opponents__count" x-text="p.handCount"></span>
               <span class="opponents__uno" x-show="p.handCount === 1 && p.unoCalled">UNO!</span>
               <button class="opponents__catch" x-show="isCatchable(p)" @click="catchUno(p.id)">Catch!</button>
@@ -159,8 +159,9 @@
 
       <div class="hand-tray">
         <div class="hand">
-          <template x-for="c in hand" :key="c.id">
+          <template x-for="(c, i) in hand" :key="c.id">
             <button class="uno-card" :class="cardClass(c)"
+                    :style="{ '--i': i - (hand.length - 1) / 2, '--n': hand.length, '--raise': (yourTurn && isPlayable(c)) ? 1 : 0 }"
                     @click="playCard(c)" :title="cardLabel(c)"
                     x-transition:enter.scale.80.duration.250ms>
               <span x-text="cardGlyph(c)"></span>

@@ -152,11 +152,23 @@ func (r *room) handleJoin(req *joinReq) {
 		req.result <- &joinResult{err: "this game has already started"}
 		return
 	}
+	// If nobody currently in the room is host - a brand new room, or one
+	// where the host disconnected and rejoined as a fresh (non-host)
+	// connection since there's no session identity to restore their old
+	// seat - the next person in gets promoted, so the room is never stuck
+	// hostless.
+	hasHost := false
+	for _, existing := range r.players {
+		if existing.isHost {
+			hasHost = true
+			break
+		}
+	}
 	id := randomID()
 	p := &player{
 		id:     id,
 		name:   req.name,
-		isHost: req.asHost,
+		isHost: req.asHost || !hasHost,
 		send:   make(chan outMsg, 8),
 	}
 	r.players[id] = p

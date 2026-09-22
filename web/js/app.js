@@ -73,6 +73,15 @@ document.addEventListener('alpine:init', () => {
     copied: false,
     errorMsg: '',
 
+    // --- reconnection ---
+    // the very first hello sent this session, kept as a fallback for
+    // reconnecting before we've ever successfully joined a room.
+    /** @type {HelloMsg|null} */
+    _firstHello: null,
+    reconnectAttempts: 0,
+    /** @type {number|null} */
+    _reconnectTimer: null,
+
     // --- in-game state, populated by "state" messages ---
     /** @type {Card[]} */
     hand: [],
@@ -143,12 +152,19 @@ document.addEventListener('alpine:init', () => {
      * @returns {void}
      */
     connect(helloMsg) {
+      if (!this._firstHello) this._firstHello = helloMsg;
+      if (this._reconnectTimer) {
+        clearTimeout(this._reconnectTimer);
+        this._reconnectTimer = null;
+      }
+
       this.status = 'connecting';
       const proto = window.location.protocol === 'https:' ? 'wss' : 'ws';
       this.ws = new WebSocket(`${proto}://${window.location.host}/ws`);
 
       this.ws.addEventListener('open', () => {
         this.status = 'ready';
+        this.reconnectAttempts = 0;
         this.ws.send(JSON.stringify(helloMsg));
       });
 
@@ -157,17 +173,48 @@ document.addEventListener('alpine:init', () => {
       });
 
       this.ws.addEventListener('close', () => {
-        if (this.screen !== 'name') {
-          this.status = 'disconnected';
-        } else {
+        if (this.screen === 'name') {
           this.status = 'ready';
+          return;
         }
+        // Any drop past this point (mobile screen lock, wifi hiccup, a
+        // laptop sleeping) gets retried automatically with backoff rather
+        // than dumping the player onto a manual "reload" screen. Note this
+        // rejoins as a brand-new player - there's no session/reconnect
+        // token, so a mid-game drop still loses that player's old seat.
+        this.scheduleReconnect();
       });
 
       this.ws.addEventListener('error', () => {
-        this.errorMsg = 'Could not connect. Please try again.';
-        this.status = 'ready';
+        if (this.screen === 'name') {
+          this.errorMsg = 'Could not connect. Please try again.';
+          this.status = 'ready';
+        }
+        // otherwise: the 'close' event that follows schedules a reconnect
       });
+    },
+
+    /** @returns {void} */
+    scheduleReconnect() {
+      this.status = 'connecting';
+      const delayMs = Math.min(1000 * 2 ** this.reconnectAttempts, 10000);
+      this.reconnectAttempts++;
+      this._reconnectTimer = setTimeout(() => {
+        this.connect(this.buildReconnectHello());
+      }, delayMs);
+    },
+
+    /**
+     * Rejoining after a drop must always join-by-code, never re-create a
+     * room - re-sending the original "create" hello would spin up a
+     * second, empty room instead of rejoining the one already in play.
+     * @returns {HelloMsg}
+     */
+    buildReconnectHello() {
+      if (this.roomId) {
+        return { type: 'hello', name: this.name.trim(), room: this.roomId, create: false };
+      }
+      return this._firstHello;
     },
 
     /**
