@@ -43,6 +43,17 @@ func main() {
 	e.GET("/ws", func(c echo.Context) error {
 		return handleWS(c, reg)
 	})
+	e.GET("/r/:code", func(c echo.Context) error {
+		if reg.get(c.Param("code")) == nil {
+			return c.Redirect(http.StatusFound, "/")
+		}
+
+		index, err := fs.ReadFile(webFS, "index.html")
+		if err != nil {
+			return err
+		}
+		return c.Blob(http.StatusOK, "text/html; charset=utf-8", index)
+	})
 
 	e.GET("/*", echo.WrapHandler(http.FileServer(http.FS(webFS))), staticFallbackMiddleware(webFS))
 

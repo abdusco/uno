@@ -46,6 +46,9 @@ self.addEventListener('activate', (event) => {
 self.addEventListener('fetch', (event) => {
   const { request } = event;
 
+  const requestURL = new URL(request.url);
+  if (requestURL.origin !== self.location.origin || !['http:', 'https:'].includes(requestURL.protocol)) return;
+
   // Never intercept the websocket handshake.
   if (request.url.startsWith('ws:') || request.url.startsWith('wss:')) return;
   if (request.method !== 'GET') return;

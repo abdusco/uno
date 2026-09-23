@@ -23,6 +23,7 @@ html,body {
   min-height: 100vh;
   background: #080b1c;
   color: var(--ink);
+  overflow-x: hidden;
 }
 body:before,body:after {
   content: "";
