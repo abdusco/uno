@@ -700,12 +700,30 @@ input[type=text]:focus,.share-box input:focus {
   bottom: 0;
   left: 0;
   z-index: 10;
+  isolation: isolate;
+  overflow: hidden;
+  border-radius: 24px 24px 0 0;
   padding: 14px 12px max(12px,env(safe-area-inset-bottom));
   border-top: 1px solid rgba(255,255,255,.1);
   background: linear-gradient(to top,rgba(5,7,22,.98),rgba(8,11,28,.92) 78%,rgba(8,11,28,.2));
   backdrop-filter: blur(12px);
 }
+.hand-tray::before {
+  position: absolute;
+  z-index: 0;
+  inset: 0;
+  content: "";
+  opacity: 0;
+  pointer-events: none;
+  background: radial-gradient(ellipse at 50% 115%,rgba(239,68,68,.25),transparent 66%);
+  transition: opacity .35s ease;
+}
+.hand-tray--your-turn::before {
+  opacity: 1;
+}
 .hand {
+  position: relative;
+  z-index: 1;
   display: flex;
   flex-wrap: wrap;
   justify-content: center;

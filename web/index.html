@@ -171,7 +171,7 @@
 
       </div>
 
-      <div class="hand-tray">
+      <div class="hand-tray" :class="{ 'hand-tray--your-turn': yourTurn && !waitingForReconnect() }">
         <div class="hand" :style="{ '--card-gap': handCardGap() + 'px' }">
           <template x-for="c in hand" :key="c.id">
             <button class="uno-card" :class="cardClass(c)"
