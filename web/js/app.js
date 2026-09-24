@@ -438,6 +438,7 @@ document.addEventListener('alpine:init', () => {
           // may lose the race while the successful catch immediately
           // broadcasts the authoritative state.
           this.errorMsg = '';
+          const wasYourTurn = this.yourTurn;
           const previousDiscardId = this.lastDiscardCardId;
           const previousDeckCount = this.deckCount;
           const previousGamePlayers = this.gamePlayers;
@@ -447,6 +448,7 @@ document.addEventListener('alpine:init', () => {
           this.gamePlayers = msg.gamePlayers || [];
           this.currentPlayerId = msg.currentPlayerId || '';
           this.yourTurn = !!msg.yourTurn;
+          if (!wasYourTurn && this.yourTurn) this.vibrate();
           this.deckCount = msg.deckCount || 0;
           this.log = msg.log || [];
           this.yourDrawnCard = msg.yourDrawnCard || null;
@@ -681,6 +683,13 @@ document.addEventListener('alpine:init', () => {
       oscillator.connect(gain).connect(this.audioContext.destination);
       oscillator.start(now);
       oscillator.stop(now + .14);
+    },
+
+    /** @returns {void} */
+    vibrate() {
+      if (typeof navigator !== 'undefined' && typeof navigator.vibrate === 'function') {
+        navigator.vibrate(100);
+      }
     },
 
     /** @returns {void} */
