@@ -137,7 +137,7 @@
 
         <div class="table-center">
           <div class="pile-row">
-            <button class="pile pile--deck" @click="drawCard()" :disabled="!yourTurn || yourDrawnCard || canChallengeWild4 || waitingForReconnect()"
+            <button class="pile pile--deck" @click="drawCard()" :disabled="!canAct || !yourTurn || yourDrawnCard || canChallengeWild4"
                     title="Draw a card">
               <span class="card-stack">
                 <span class="card-stack__layer card-stack__layer--3"></span>
@@ -193,8 +193,8 @@
         </span>
         <p class="draw-prompt__label">You drew <span x-text="yourDrawnCard && cardLabel(yourDrawnCard)"></span></p>
         <div class="draw-prompt__actions">
-          <button class="btn btn--primary" @click="playDrawnCard()" :disabled="!canSend() || !_gameSynced || waitingForReconnect()">Play it</button>
-          <button class="btn" @click="keepDrawnCard()" :disabled="!canSend() || !_gameSynced || waitingForReconnect()">Keep in hand</button>
+          <button class="btn btn--primary" @click="playDrawnCard()" :disabled="!canAct">Play it</button>
+          <button class="btn" @click="keepDrawnCard()" :disabled="!canAct">Keep in hand</button>
         </div>
       </div>
 
@@ -204,8 +204,8 @@
           <p class="challenge-prompt__title">Wild Draw Four!</p>
           <p class="challenge-prompt__copy">Accept 4 cards, or challenge if you think it was played illegally.</p>
           <div class="draw-prompt__actions">
-            <button class="btn btn--primary" @click="acceptWildDrawFour()" :disabled="!canSend() || !_gameSynced || waitingForReconnect()">Draw 4</button>
-            <button class="btn" @click="challengeWildDrawFour()" :disabled="!canSend() || !_gameSynced || waitingForReconnect()">Challenge</button>
+            <button class="btn btn--primary" @click="acceptWildDrawFour()" :disabled="!canAct">Draw 4</button>
+            <button class="btn" @click="challengeWildDrawFour()" :disabled="!canAct">Challenge</button>
           </div>
         </div>
       </div>
@@ -214,10 +214,10 @@
       <div class="overlay" x-show="pendingWildCard" x-cloak>
         <p>Pick a color</p>
         <div class="color-picker">
-          <button class="color-swatch color-swatch--red" @click="chooseColor('red')" :disabled="!canSend() || !_gameSynced || waitingForReconnect()" aria-label="Red"></button>
-          <button class="color-swatch color-swatch--yellow" @click="chooseColor('yellow')" :disabled="!canSend() || !_gameSynced || waitingForReconnect()" aria-label="Yellow"></button>
-          <button class="color-swatch color-swatch--green" @click="chooseColor('green')" :disabled="!canSend() || !_gameSynced || waitingForReconnect()" aria-label="Green"></button>
-          <button class="color-swatch color-swatch--blue" @click="chooseColor('blue')" :disabled="!canSend() || !_gameSynced || waitingForReconnect()" aria-label="Blue"></button>
+          <button class="color-swatch color-swatch--red" @click="chooseColor('red')" :disabled="!canAct" aria-label="Red"></button>
+          <button class="color-swatch color-swatch--yellow" @click="chooseColor('yellow')" :disabled="!canAct" aria-label="Yellow"></button>
+          <button class="color-swatch color-swatch--green" @click="chooseColor('green')" :disabled="!canAct" aria-label="Green"></button>
+          <button class="color-swatch color-swatch--blue" @click="chooseColor('blue')" :disabled="!canAct" aria-label="Blue"></button>
         </div>
         <button class="btn" @click="cancelWildPick()">Cancel</button>
       </div>

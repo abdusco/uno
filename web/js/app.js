@@ -623,6 +623,12 @@ document.addEventListener('alpine:init', () => {
       return this.status === 'ready' && this.ws?.readyState === WebSocket.OPEN;
     },
 
+    /** @returns {boolean} whether the current game can accept an action */
+    get canAct() {
+      return this.canSend() && this._gameSynced && this.screen === 'game' &&
+        !this.gameOver && !this.waitingForReconnect();
+    },
+
     /**
      * Actions use the accepted socket and, during play, its fresh snapshot.
      * Failed actions are never queued for replay against a later turn.
@@ -631,7 +637,7 @@ document.addEventListener('alpine:init', () => {
      */
     sendAction(msg) {
       if (!this.canSend()) return false;
-      if (msg.type !== 'start' && (!this._gameSynced || this.screen !== 'game' || this.gameOver || this.waitingForReconnect())) return false;
+      if (msg.type !== 'start' && !this.canAct) return false;
       const ws = this.ws;
       try {
         ws.send(JSON.stringify(msg));
@@ -938,8 +944,7 @@ document.addEventListener('alpine:init', () => {
 
     /** @param {Card} card @returns {boolean} */
     canPlayCard(card) {
-      return this.canSend() && this._gameSynced && !this.gameOver && this.yourTurn &&
-        !this.canChallengeWild4 && !this.waitingForReconnect() && this.isPlayable(card) &&
+      return this.canAct && this.yourTurn && !this.canChallengeWild4 && this.isPlayable(card) &&
         this.hand.some(candidate => candidate.id === card.id) &&
         (!this.yourDrawnCard || this.yourDrawnCard.id === card.id);
     },
@@ -1034,7 +1039,7 @@ document.addEventListener('alpine:init', () => {
 
     /** @returns {void} */
     drawCard() {
-      if (!this.canSend() || !this.yourTurn || this.yourDrawnCard || this.canChallengeWild4 || this.waitingForReconnect()) return;
+      if (!this.canAct || !this.yourTurn || this.yourDrawnCard || this.canChallengeWild4) return;
       this.prepareAudio();
       this.sendAction({ type: 'draw' });
     },
@@ -1096,7 +1101,7 @@ document.addEventListener('alpine:init', () => {
 
     /** @returns {void} */
     callUno() {
-      if (!this.canSend() || !this.canCallUno()) return;
+      if (!this.canAct || !this.canCallUno()) return;
       this.prepareAudio();
       this.sendAction({ type: 'callUno' });
     },
