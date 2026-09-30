@@ -182,6 +182,33 @@ func TestReconnect(t *testing.T) {
 	})
 }
 
+func TestReconnectRefreshesAllGamePlayers(t *testing.T) {
+	r := newRoom("SYNC1", "Test Room")
+	alice := joinRoom(t, r, "Alice")
+	bob := joinRoom(t, r, "Bob")
+	syncRoom(t, r)
+	r.status = "playing"
+	r.game = startGame([]string{alice.player.id, bob.player.id}, r.nameOf)
+	leave(t, r, bob)
+	drainMessages(alice.sendCh)
+	resumed := reconnectRoom(t, r, bob.player.token)
+	syncRoom(t, r)
+	for _, ch := range []chan outMsg{alice.sendCh, resumed.sendCh} {
+		var snapshot *outMsg
+		for _, msg := range drainMessages(ch) {
+			if msg.Type == "state" {
+				copy := msg
+				snapshot = &copy
+			}
+		}
+		require.NotNil(t, snapshot, "both players need an updated snapshot to unpause")
+		require.Len(t, snapshot.GamePlayers, 2)
+		for _, player := range snapshot.GamePlayers {
+			require.True(t, player.Connected)
+		}
+	}
+}
+
 func TestRoomPlayerLimit(t *testing.T) {
 	r := newRoom("FULL1", "Full Room")
 	var first *joinResult

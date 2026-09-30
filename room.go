@@ -296,7 +296,7 @@ func (r *room) handleJoin(req *joinReq) {
 				// turn to resume - route through the same check a
 				// disconnect would.
 				r.autoSkipDisconnected()
-				r.sendStateTo(p)
+				r.broadcastState()
 			} else if r.game != nil && r.game.winnerID != "" {
 				// post-game, pre-rematch lobby window - replay the banner.
 				p.send <- outMsg{Type: "gameOver", WinnerID: r.game.winnerID, WinnerName: r.nameOf(r.game.winnerID)}
