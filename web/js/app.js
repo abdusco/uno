@@ -1,16 +1,6 @@
-// Must match the .uno-card width and normal gap in style.css - used to
-// compute how many hand cards fit per row (see handCardGap()).
-const CARD_WIDTH = 72;
-const CARD_GAP = 8;
-// Cards in a row never overlap by more than this fraction of their width
-// before the hand splits into another row instead.
-const MAX_CARD_OVERLAP = 0.3;
 // One sixteenth-note in the background arrangement (about 83 BPM). The
 // sequence spans 32 steps / two bars before repeating.
 const MUSIC_STEP_SECONDS = 0.18;
-// Rough horizontal padding budget (both sides combined) around the hand
-// row, subtracted from the viewport width to get available card-row width.
-const HAND_SIDE_PADDING = 24;
 
 // Four harmonically distinct chords underlying the background music: Cmaj7,
 // Am7, Fmaj7 and G7. Each MUSIC_LEAD_PHRASES entry is a 32-step melody over
@@ -197,10 +187,6 @@ document.addEventListener('alpine:init', () => {
     /** @type {{winnerId: string, winnerName: string}|null} */
     gameOver: null,
 
-    // tracked reactively so handCardGap() re-runs on resize - e.g. a
-    // phone rotating, or a desktop window being narrowed.
-    viewportWidth: window.innerWidth,
-
     // Background music is synthesized locally with the Web Audio API. It
     // avoids shipping a large audio file and begins only after a user action,
     // which also respects browser autoplay rules.
@@ -221,9 +207,6 @@ document.addEventListener('alpine:init', () => {
 
     /** @returns {void} */
     init() {
-      window.addEventListener('resize', () => {
-        this.viewportWidth = window.innerWidth;
-      });
       this._recoverConnection = () => {
         if (document.visibilityState === 'hidden') return;
         if (!this.roomId && !this._firstHello?.token) return;
@@ -949,50 +932,21 @@ document.addEventListener('alpine:init', () => {
         (!this.yourDrawnCard || this.yourDrawnCard.id === card.id);
     },
 
-    /**
-     * A single per-card trailing gap (margin-right, in px - often negative,
-     * i.e. an overlap) applied uniformly to every hand card, so the
-     * browser's own `flex-wrap` does the actual row-breaking instead of
-     * manually slicing the hand into row arrays. It's sized so that
-     * exactly `perRow` cards - the equal-ish target row size for the
-     * current hand length and viewport width - fit the available width,
-     * using only as much overlap as that requires (often none) and never
-     * more than 30% of a card's width. Applying it as trailing margin
-     * (not leading) matters: a uniform *leading* margin would also yank
-     * the first card of every wrapped row and the very first card of the
-     * hand leftward; a trailing margin only ever pulls the *next* card on
-     * the same line closer, so it's a no-op at both the hand's start and
-     * every row-wrap boundary - exactly the "no gap needed there" cases.
-     * @returns {number}
-     */
-    handCardGap() {
-      const n = this.hand.length;
-      if (n <= 1) return 0;
-      const available = this.handRowWidth();
-      const maxPerRow = this.maxCardsPerRow();
-      const rows = Math.max(1, Math.ceil(n / maxPerRow));
-      const perRow = Math.min(n, Math.ceil(n / rows));
-      if (perRow <= 1) return 0;
-      const natural = perRow * CARD_WIDTH + (perRow - 1) * CARD_GAP;
-      if (natural <= available) return CARD_GAP;
-      const advance = Math.max((available - CARD_WIDTH) / (perRow - 1), CARD_WIDTH * (1 - MAX_CARD_OVERLAP));
-      return advance - CARD_WIDTH;
+    /** @returns {number} up to two balanced rows; small hands stay in one */
+    get handColumns() {
+      return Math.max(1, this.hand.length > 4 ? Math.ceil(this.hand.length / 2) : this.hand.length);
     },
 
     /**
-     * How many cards fit in one row before needing more than 30% overlap
-     * to do so, given the current viewport width.
+     * Each card spans two grid tracks. An odd hand offsets the shorter
+     * second row by one track to center it without spacer elements.
+     * @param {number} index
      * @returns {number}
      */
-    maxCardsPerRow() {
-      const available = this.handRowWidth();
-      const minAdvance = CARD_WIDTH * (1 - MAX_CARD_OVERLAP);
-      return Math.max(1, Math.floor(1 + (available - CARD_WIDTH) / minAdvance));
-    },
-
-    /** @returns {number} usable width for a row of hand cards, in px */
-    handRowWidth() {
-      return Math.max(this.viewportWidth - HAND_SIDE_PADDING, CARD_WIDTH);
+    handCardColumn(index) {
+      const columns = this.handColumns;
+      const offset = index >= columns && this.hand.length % 2 ? 1 : 0;
+      return (index % columns) * 2 + 1 + offset;
     },
 
     /**

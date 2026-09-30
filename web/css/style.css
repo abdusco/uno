@@ -354,11 +354,14 @@ input[type=text]:focus,.share-box input:focus {
   min-height: 100vh;
   min-height: 100dvh;
   margin: 0 auto;
-  padding: max(15px,env(safe-area-inset-top)) 16px 210px;
+  padding: max(15px,env(safe-area-inset-top)) 16px var(--hand-clearance,210px);
   display: flex;
   flex-direction: column;
   gap: 14px;
   color: var(--ink);
+}
+.game-screen--two-rows {
+  --hand-clearance: min(340px,calc(45vh + 50px));
 }
 .game-header {
   display: flex;
@@ -678,7 +681,7 @@ input[type=text]:focus,.share-box input:focus {
 }
 .hand button.uno-card {
   --raise: 0;
-  margin-right: var(--card-gap,8px);
+  width: var(--hand-card-width);
   transform: translateY(calc(var(--raise) * -17px));
 }
 .hand button.uno-card:not(.uno-card--disabled) {
@@ -722,16 +725,21 @@ input[type=text]:focus,.share-box input:focus {
   opacity: 1;
 }
 .hand {
+  --hand-card-width: 78px;
+  /* Shrink spacing to fit, with at most 30% overlap between cards.
+     Two tracks per card allow an odd second row to sit half a card in. */
+  --card-step: clamp(calc(var(--hand-card-width) * .7),calc(100% / var(--hand-columns)),calc(var(--hand-card-width) + 8px));
   position: relative;
   z-index: 1;
-  display: flex;
-  flex-wrap: wrap;
-  justify-content: center;
+  display: grid;
+  grid-template-columns: repeat(calc(var(--hand-columns) * 2),calc(var(--card-step) / 2));
+  justify-content: safe center;
+  justify-items: center;
   max-height: 45vh;
   /* Playable cards rise 17px and hover adds another 7px. Keep a little
      extra headroom because this element is also the hand's scroll box. */
   padding: 34px 12px 10px;
-  overflow-y: auto;
+  overflow: auto;
   row-gap: 11px;
 }
 .uno-fab {
@@ -912,8 +920,11 @@ input[type=text]:focus,.share-box input:focus {
 }
 @media (max-height:650px) {
   .game-screen {
-    padding-bottom: 175px;
+    padding-bottom: var(--hand-clearance,175px);
     gap: 9px;
+  }
+  .game-screen--two-rows {
+    --hand-clearance: min(300px,calc(39vh + 50px));
   }
   .table-center {
     min-height: 160px;
@@ -928,6 +939,7 @@ input[type=text]:focus,.share-box input:focus {
     height: 95px;
   }
   .hand {
+    --hand-card-width: 66px;
     max-height: 39vh;
     padding-top: 30px;
   }
