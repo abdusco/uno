@@ -149,13 +149,17 @@ document.addEventListener('alpine:init', () => {
     errorMsg: '',
 
     // --- reconnection ---
-    // the very first hello sent this session, kept as a fallback for
-    // reconnecting before we've ever successfully joined a room.
+    // The latest hello is kept for retrying a cached identity before
+    // the server has accepted our room session.
     /** @type {HelloMsg|null} */
     _firstHello: null,
     reconnectAttempts: 0,
     /** @type {number|null} */
     _reconnectTimer: null,
+    _connectionTimer: null,
+    _heartbeatTimer: null,
+    _lastMessageAt: 0,
+    _recoverConnection: null,
     // opaque secret handed back on "joined" - cached in localStorage
     // (keyed by room code) so a dropped connection or a full page reload
     // can resume this same identity instead of joining as someone new.
@@ -219,6 +223,15 @@ document.addEventListener('alpine:init', () => {
       window.addEventListener('resize', () => {
         this.viewportWidth = window.innerWidth;
       });
+      this._recoverConnection = () => {
+        if (document.visibilityState === 'hidden') return;
+        if (!this.roomId && !this._firstHello?.token) return;
+        if (!this.ws || this.ws.readyState !== WebSocket.OPEN || Date.now() - this._lastMessageAt >= 30000) {
+          this.connect(this.buildReconnectHello());
+        }
+      };
+      window.addEventListener('online', this._recoverConnection);
+      document.addEventListener('visibilitychange', this._recoverConnection);
       this.registerServiceWorker();
       try {
         this.musicEnabled = localStorage.getItem('uno:music') !== 'off';
@@ -309,7 +322,8 @@ document.addEventListener('alpine:init', () => {
      * @returns {void}
      */
     connect(helloMsg) {
-      if (!this._firstHello) this._firstHello = helloMsg;
+      this._firstHello = helloMsg;
+      this.stopConnectionTimers();
       if (this._reconnectTimer) {
         clearTimeout(this._reconnectTimer);
         this._reconnectTimer = null;
@@ -328,7 +342,12 @@ document.addEventListener('alpine:init', () => {
       // fires *that* socket's 'close' too, and so on - an unbounded
       // reconnect ping-pong with nothing ever wrong on the network.
       const ws = new WebSocket(`${proto}://${window.location.host}/ws`);
+      const previous = this.ws;
       this.ws = ws;
+      if (previous) previous.close();
+      this._lastMessageAt = Date.now();
+      // Bound both the handshake and the wait for an accepted hello.
+      this._connectionTimer = setTimeout(() => this.connectionLost(ws), 15000);
 
       ws.addEventListener('open', () => {
         if (this.ws !== ws) return;
@@ -337,20 +356,11 @@ document.addEventListener('alpine:init', () => {
 
       ws.addEventListener('message', (event) => {
         if (this.ws !== ws) return;
+        this._lastMessageAt = Date.now();
         this.handleMessage(JSON.parse(event.data));
       });
 
-      ws.addEventListener('close', () => {
-        if (this.ws !== ws) return;
-        if (this.screen === 'name') {
-          this.status = 'ready';
-          return;
-        }
-        // Any drop past this point (mobile screen lock, wifi hiccup, a
-        // laptop sleeping) gets retried automatically with backoff rather
-        // than dumping the player onto a manual "reload" screen.
-        this.scheduleReconnect();
-      });
+      ws.addEventListener('close', () => this.connectionLost(ws));
 
       ws.addEventListener('error', () => {
         if (this.ws !== ws) return;
@@ -360,6 +370,54 @@ document.addEventListener('alpine:init', () => {
         }
         // otherwise: the 'close' event that follows schedules a reconnect
       });
+    },
+
+    /** @returns {void} */
+    stopConnectionTimers() {
+      clearTimeout(this._connectionTimer);
+      clearInterval(this._heartbeatTimer);
+      this._connectionTimer = null;
+      this._heartbeatTimer = null;
+    },
+
+    /** @param {WebSocket} ws */
+    connectionLost(ws) {
+      if (this.ws !== ws) return;
+      this.ws = null;
+      this.stopConnectionTimers();
+      ws.close();
+      if (this.roomId || this._firstHello?.token) {
+        this.scheduleReconnect();
+      } else {
+        this.status = 'ready';
+        this.errorMsg = 'Could not connect. Please try again.';
+      }
+    },
+
+    /** @returns {void} */
+    startHeartbeat() {
+      this.stopConnectionTimers();
+      const ws = this.ws;
+      this._heartbeatTimer = setInterval(() => {
+        if (this.ws !== ws) return;
+        if (ws.readyState !== WebSocket.OPEN || Date.now() - this._lastMessageAt >= 30000) {
+          this.connectionLost(ws);
+          return;
+        }
+        ws.send(JSON.stringify({ type: 'ping' }));
+      }, 10000);
+    },
+
+    /** @returns {void} */
+    destroy() {
+      window.removeEventListener('online', this._recoverConnection);
+      document.removeEventListener('visibilitychange', this._recoverConnection);
+      clearTimeout(this._reconnectTimer);
+      this.stopConnectionTimers();
+      const ws = this.ws;
+      this.ws = null;
+      if (ws) ws.close();
+      this.stopMusic();
     },
 
     /** @returns {void} */
@@ -391,7 +449,10 @@ document.addEventListener('alpine:init', () => {
      */
     handleMessage(msg) {
       switch (msg.type) {
+        case 'pong':
+          break;
         case 'joined':
+          this.startHeartbeat();
           // Opening the TCP/WebSocket connection is not enough to prove a
           // reconnect succeeded: the server can still reject the hello. Only
           // reset backoff once it has accepted our room identity.
@@ -500,6 +561,7 @@ document.addEventListener('alpine:init', () => {
      * @returns {void}
      */
     resetMissingRoom() {
+      this.stopConnectionTimers();
       const missingRoom = this.roomId || this.joiningRoom;
       this.clearCachedIdentity(missingRoom);
       if (this.ws) {

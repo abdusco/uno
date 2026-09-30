@@ -114,7 +114,8 @@ func handleWS(c echo.Context, reg *registry) error {
 	if err != nil {
 		return err
 	}
-	ctx := r.Context()
+	ctx, cancelConnection := context.WithCancel(r.Context())
+	defer cancelConnection()
 	// Every exit path below closes conn exactly once, however it gets
 	// there - a graceful close with a status/reason if one fires first, a
 	// bare CloseNow() (via the deferred call, or via a reconnect kicking
@@ -200,12 +201,28 @@ func handleWS(c echo.Context, reg *registry) error {
 		}
 	}()
 
+	// Protocol pings detect half-open connections even while the game is idle.
+	go monitorWS(ctx, conn, 15*time.Second, 10*time.Second, func() {
+		closeOnce.Do(func() { conn.CloseNow() })
+	})
+
 	// Pump incoming messages from this socket to the room.
 	for {
 		var m inMsg
 		err := wsjson.Read(ctx, conn, &m)
 		if err != nil {
 			break
+		}
+		// Browser JavaScript cannot observe protocol pongs. Reply to its
+		// application heartbeat directly, without involving game state.
+		if m.Type == "ping" {
+			writeCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+			err := wsjson.Write(writeCtx, conn, outMsg{Type: "pong"})
+			cancel()
+			if err != nil {
+				break
+			}
+			continue
 		}
 		select {
 		case rm.actionCh <- roomAction{playerID: p.id, msg: m}:
@@ -234,4 +251,25 @@ func handleWS(c echo.Context, reg *registry) error {
 func writeClientError(ctx context.Context, conn *websocket.Conn, err error) {
 	code, message := clientErrorDetails(err)
 	_ = wsjson.Write(ctx, conn, outMsg{Type: "error", Code: code, Message: message})
+}
+
+// monitorWS closes an unresponsive connection so the reader reports its leave
+// to the room. Cancellation stops the monitor when the handler exits.
+func monitorWS(ctx context.Context, conn *websocket.Conn, interval, timeout time.Duration, onFailure func()) {
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			pingCtx, cancel := context.WithTimeout(ctx, timeout)
+			err := conn.Ping(pingCtx)
+			cancel()
+			if err != nil {
+				onFailure()
+				return
+			}
+		}
+	}
 }

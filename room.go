@@ -267,8 +267,7 @@ func (r *room) handleJoin(req *joinReq) {
 		if p, ok := r.findByToken(req.token); ok {
 			if p.connected {
 				// A connection is still nominally attached (e.g. a stale
-				// half-dead socket that hasn't errored out yet - there's no
-				// ping/read-deadline to notice that on its own). Force it
+				// half-dead socket before its heartbeat has timed out). Force it
 				// closed on both ends: kick() breaks its reader loop, and
 				// closing its send channel breaks its writer goroutine's
 				// range loop - otherwise that goroutine leaks forever,
