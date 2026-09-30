@@ -494,6 +494,15 @@ document.addEventListener('alpine:init', () => {
           this.startMusic();
           break;
         case 'state':
+          // State snapshots describe an active round. A reconnect can enter
+          // a rematch without receiving its earlier "started" event.
+          if (this.gameOver) {
+            this.pendingWildCard = null;
+            this.lastDiscardCardId = '';
+            this.gamePlayers = [];
+            this.deckCount = 0;
+          }
+          this.gameOver = null;
           // A state transition supersedes transient action errors. This is
           // especially important for simultaneous UNO catches: one catcher
           // may lose the race while the successful catch immediately

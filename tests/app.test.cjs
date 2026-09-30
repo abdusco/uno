@@ -85,3 +85,26 @@ test('returning from sleep replaces a stale socket and ignores its late close', 
   assert.equal(f.app._reconnectTimer, null);
   assert.equal(f.app.status, 'connecting');
 });
+
+
+test('reconnecting into a rematch removes the old winner and color picker', () => {
+  const f = fixture(); f.join();
+  f.app.screen = 'game';
+  f.app.gameOver = { winnerId: 'b', winnerName: 'Bob' };
+  f.app.pendingWildCard = { id: 'previous-round-wild', color: 'wild', value: 'wild' };
+  f.app.handleMessage({
+    type: 'state', hand: [{ id: 'new-card', color: 'red', value: '1' }],
+    gamePlayers: [{ id: 'a', connected: true }, { id: 'b', connected: true }],
+    yourTurn: true, currentPlayerId: 'a',
+  });
+  assert.equal(f.app.gameOver, null);
+  assert.equal(f.app.pendingWildCard, null);
+  assert.equal(f.app.screen, 'game');
+  assert.equal(f.app.hand[0].id, 'new-card');
+});
+
+test('rejoining a completed round still shows its winner', () => {
+  const f = fixture(); f.join();
+  f.app.handleMessage({ type: 'gameOver', winnerId: 'b', winnerName: 'Bob' });
+  assert.equal(f.app.gameOver.winnerId, 'b');
+});
