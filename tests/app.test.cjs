@@ -108,3 +108,124 @@ test('rejoining a completed round still shows its winner', () => {
   f.app.handleMessage({ type: 'gameOver', winnerId: 'b', winnerName: 'Bob' });
   assert.equal(f.app.gameOver.winnerId, 'b');
 });
+
+function gameFixture() {
+  const f = fixture(); f.join();
+  f.app.handleMessage({
+    type: 'state',
+    hand: [{ id: 'wild', color: 'wild', value: 'wild' }, { id: 'red', color: 'red', value: '1' }],
+    discardTop: { id: 'discard', color: 'red', value: '2' }, topColor: 'red',
+    gamePlayers: [{ id: 'a', connected: true }, { id: 'b', connected: true, unoCatchable: true }],
+    yourTurn: true, currentPlayerId: 'a',
+  });
+  return f;
+}
+
+test('all game actions reject connecting, closing, closed, and unaccepted sockets', () => {
+  for (const readyState of [0, 2, 3, 1]) {
+    const f = gameFixture(); const socket = f.app.ws;
+    socket.sent = [];
+    socket.readyState = readyState;
+    if (readyState === 1) f.app.status = 'connecting';
+    f.app.pendingWildCard = f.app.hand[0];
+    f.app.yourDrawnCard = f.app.hand[0];
+    for (const action of [
+      () => f.app.chooseColor('red'), () => f.app.sendPlay('wild', 'red'),
+      () => f.app.playDrawnCard(), () => f.app.keepDrawnCard(),
+      () => f.app.catchUno('b'), () => f.app.callUno(),
+      () => { f.app.yourDrawnCard = null; f.app.drawCard(); },
+      () => { f.app.canChallengeWild4 = true; f.app.acceptWildDrawFour(); f.app.challengeWildDrawFour(); },
+      () => { f.app.screen = 'lobby'; f.app.startGame(); },
+    ]) assert.doesNotThrow(action);
+    assert.equal(socket.sent.length, 0);
+    assert.equal(f.app.pendingWildCard.id, 'wild', 'unsent color choices must remain available');
+  }
+});
+
+test('rejoined players wait for authoritative state before acting', () => {
+  const f = gameFixture();
+  f.join();
+  f.app.ws.sent = [];
+  assert.equal(f.app.sendPlay('red', ''), false);
+  f.app.drawCard(); f.app.catchUno('b');
+  assert.equal(f.app.ws.sent.length, 0);
+  f.app.handleMessage({
+    type: 'state', hand: f.app.hand, discardTop: f.app.discardTop, topColor: 'red',
+    gamePlayers: f.app.gamePlayers, yourTurn: true,
+  });
+  assert.equal(f.app.sendPlay('red', ''), true);
+  assert.equal(f.app.ws.sent.at(-1).type, 'play');
+});
+
+test('fresh snapshots dismiss wild choices for expired turns or missing cards', () => {
+  for (const yourTurn of [true, false]) {
+    const f = gameFixture();
+    f.app.pendingWildCard = f.app.hand[0];
+    f.app.handleMessage({
+      type: 'state', hand: yourTurn ? [] : f.app.hand, yourTurn,
+      discardTop: f.app.discardTop, topColor: 'red', gamePlayers: f.app.gamePlayers,
+    });
+    assert.equal(f.app.pendingWildCard, null);
+  }
+});
+
+test('an unchanged wild choice survives reconnect and sends only after synchronization', () => {
+  const f = gameFixture();
+  f.app.pendingWildCard = f.app.hand[0];
+  f.join(); f.app.ws.sent = [];
+  f.app.chooseColor('blue');
+  assert.equal(f.app.pendingWildCard.id, 'wild');
+  assert.equal(f.app.ws.sent.length, 0);
+  f.app.handleMessage({
+    type: 'state', hand: f.app.hand, yourTurn: true,
+    discardTop: f.app.discardTop, topColor: 'red', gamePlayers: f.app.gamePlayers,
+  });
+  f.app.chooseColor('blue');
+  assert.equal(f.app.ws.sent.at(-1).color, 'blue');
+  assert.equal(f.app.pendingWildCard, null);
+});
+
+test('send failures trigger recovery without replaying the action', () => {
+  const f = gameFixture();
+  f.app.ws.send = () => { throw new Error('network failure'); };
+  assert.equal(f.app.sendPlay('red', ''), false);
+  assert.equal(f.app.ws, null);
+  assert.equal(f.app.status, 'connecting');
+  assert.ok(f.app._reconnectTimer);
+  f.join();
+  assert.equal(f.app.ws.sent.length, 1);
+  assert.equal(f.app.ws.sent[0].type, 'hello');
+});
+
+test('pausing for another player preserves a valid wild choice without sending it', () => {
+  const f = gameFixture();
+  f.app.pendingWildCard = f.app.hand[0];
+  f.app.ws.sent = [];
+  f.app.handleMessage({
+    type: 'state', hand: f.app.hand, yourTurn: true,
+    discardTop: f.app.discardTop, topColor: 'red',
+    gamePlayers: [{ id: 'a', connected: true }, { id: 'b', connected: false }],
+  });
+  f.app.chooseColor('blue');
+  assert.equal(f.app.pendingWildCard.id, 'wild');
+  assert.equal(f.app.ws.sent.length, 0);
+});
+
+test('legal actions still send on the synchronized connection', () => {
+  const cases = [
+    ['draw', app => app.drawCard()],
+    ['play', app => app.sendPlay('red', '')],
+    ['pass', app => { app.yourDrawnCard = app.hand[0]; app.keepDrawnCard(); }],
+    ['acceptWild4', app => { app.canChallengeWild4 = true; app.acceptWildDrawFour(); }],
+    ['challengeWild4', app => { app.canChallengeWild4 = true; app.challengeWildDrawFour(); }],
+    ['callUno', app => app.callUno()],
+    ['catchUno', app => app.catchUno('b')],
+    ['start', app => { app.screen = 'lobby'; app.startGame(); }],
+  ];
+  for (const [type, action] of cases) {
+    const f = gameFixture(); f.app.ws.sent = [];
+    action(f.app);
+    assert.equal(f.app.ws.sent.length, 1, type);
+    assert.equal(f.app.ws.sent[0].type, type);
+  }
+});

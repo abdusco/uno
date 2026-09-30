@@ -160,6 +160,7 @@ document.addEventListener('alpine:init', () => {
     _heartbeatTimer: null,
     _lastMessageAt: 0,
     _recoverConnection: null,
+    _gameSynced: false,
     // opaque secret handed back on "joined" - cached in localStorage
     // (keyed by room code) so a dropped connection or a full page reload
     // can resume this same identity instead of joining as someone new.
@@ -323,6 +324,7 @@ document.addEventListener('alpine:init', () => {
      */
     connect(helloMsg) {
       this._firstHello = helloMsg;
+      this._gameSynced = false;
       this.stopConnectionTimers();
       if (this._reconnectTimer) {
         clearTimeout(this._reconnectTimer);
@@ -384,6 +386,7 @@ document.addEventListener('alpine:init', () => {
     connectionLost(ws) {
       if (this.ws !== ws) return;
       this.ws = null;
+      this._gameSynced = false;
       this.stopConnectionTimers();
       ws.close();
       if (this.roomId || this._firstHello?.token) {
@@ -487,6 +490,8 @@ document.addEventListener('alpine:init', () => {
           if (me) this.isHost = me.isHost;
           break;
         case 'started':
+          this._gameSynced = false;
+          this.pendingWildCard = null;
           this.gameOver = null;
           this.errorMsg = '';
           this.canChallengeWild4 = false;
@@ -523,6 +528,12 @@ document.addEventListener('alpine:init', () => {
           this.log = msg.log || [];
           this.yourDrawnCard = msg.yourDrawnCard || null;
           this.canChallengeWild4 = !!msg.canChallengeWild4;
+          this._gameSynced = true;
+          if (this.pendingWildCard && (!this.yourTurn || this.canChallengeWild4 ||
+            !this.hand.some(card => card.id === this.pendingWildCard.id) ||
+            (this.yourDrawnCard && this.yourDrawnCard.id !== this.pendingWildCard.id))) {
+            this.pendingWildCard = null;
+          }
           this.lastDiscardCardId = this.discardTop ? this.discardTop.id : '';
           // Ignore the first state snapshot; after that, these differences
           // correspond to a card landing on the discard pile or leaving the
@@ -602,9 +613,33 @@ document.addEventListener('alpine:init', () => {
 
     /** @returns {void} */
     startGame() {
-      if (!this.ws) return;
+      if (!this.canSend() || !this.isHost || this.screen !== 'lobby') return;
       this.startMusic();
-      this.ws.send(JSON.stringify({ type: 'start' }));
+      this.sendAction({ type: 'start' });
+    },
+
+    /** @returns {boolean} */
+    canSend() {
+      return this.status === 'ready' && this.ws?.readyState === WebSocket.OPEN;
+    },
+
+    /**
+     * Actions use the accepted socket and, during play, its fresh snapshot.
+     * Failed actions are never queued for replay against a later turn.
+     * @param {Object} msg
+     * @returns {boolean}
+     */
+    sendAction(msg) {
+      if (!this.canSend()) return false;
+      if (msg.type !== 'start' && (!this._gameSynced || this.screen !== 'game' || this.gameOver || this.waitingForReconnect())) return false;
+      const ws = this.ws;
+      try {
+        ws.send(JSON.stringify(msg));
+        return true;
+      } catch {
+        this.connectionLost(ws);
+        return false;
+      }
     },
 
     /** @returns {void} */
@@ -897,8 +932,16 @@ document.addEventListener('alpine:init', () => {
      */
     cardClass(card) {
       let cls = `uno-card--${card.color}`;
-      if (!this.yourTurn || this.canChallengeWild4 || this.waitingForReconnect() || !this.isPlayable(card)) cls += ' uno-card--disabled';
+      if (!this.canPlayCard(card)) cls += ' uno-card--disabled';
       return cls;
+    },
+
+    /** @param {Card} card @returns {boolean} */
+    canPlayCard(card) {
+      return this.canSend() && this._gameSynced && !this.gameOver && this.yourTurn &&
+        !this.canChallengeWild4 && !this.waitingForReconnect() && this.isPlayable(card) &&
+        this.hand.some(candidate => candidate.id === card.id) &&
+        (!this.yourDrawnCard || this.yourDrawnCard.id === card.id);
     },
 
     /**
@@ -955,7 +998,7 @@ document.addEventListener('alpine:init', () => {
      * @returns {void}
      */
     playCard(card) {
-      if (!this.yourTurn || this.canChallengeWild4 || this.waitingForReconnect() || !this.isPlayable(card)) return;
+      if (!this.canPlayCard(card)) return;
       if (card.color === 'wild') {
         this.pendingWildCard = card;
         return;
@@ -969,8 +1012,7 @@ document.addEventListener('alpine:init', () => {
      */
     chooseColor(color) {
       if (!this.pendingWildCard) return;
-      this.sendPlay(this.pendingWildCard.id, color);
-      this.pendingWildCard = null;
+      if (this.sendPlay(this.pendingWildCard.id, color)) this.pendingWildCard = null;
     },
 
     /** @returns {void} */
@@ -981,19 +1023,20 @@ document.addEventListener('alpine:init', () => {
     /**
      * @param {string} cardId
      * @param {string} color
-     * @returns {void}
+     * @returns {boolean}
      */
     sendPlay(cardId, color) {
-      if (!this.ws) return;
+      const card = this.hand.find(candidate => candidate.id === cardId);
+      if (!card || !this.canPlayCard(card)) return false;
       this.prepareAudio();
-      this.ws.send(JSON.stringify({ type: 'play', cardId, color }));
+      return this.sendAction({ type: 'play', cardId, color });
     },
 
     /** @returns {void} */
     drawCard() {
-      if (!this.ws || !this.yourTurn || this.yourDrawnCard || this.canChallengeWild4 || this.waitingForReconnect()) return;
+      if (!this.canSend() || !this.yourTurn || this.yourDrawnCard || this.canChallengeWild4 || this.waitingForReconnect()) return;
       this.prepareAudio();
-      this.ws.send(JSON.stringify({ type: 'draw' }));
+      this.sendAction({ type: 'draw' });
     },
 
     /**
@@ -1002,31 +1045,25 @@ document.addEventListener('alpine:init', () => {
      * @returns {void}
      */
     playDrawnCard() {
-      if (!this.yourDrawnCard) return;
-      const card = this.yourDrawnCard;
-      if (card.color === 'wild') {
-        this.pendingWildCard = card;
-        return;
-      }
-      this.sendPlay(card.id, '');
+      if (this.yourDrawnCard) this.playCard(this.yourDrawnCard);
     },
 
     /** @returns {void} */
     keepDrawnCard() {
-      if (!this.ws) return;
-      this.ws.send(JSON.stringify({ type: 'pass' }));
+      if (!this.yourTurn || !this.yourDrawnCard) return;
+      this.sendAction({ type: 'pass' });
     },
 
     /** @returns {void} */
     acceptWildDrawFour() {
-      if (!this.ws || !this.canChallengeWild4) return;
-      this.ws.send(JSON.stringify({ type: 'acceptWild4' }));
+      if (!this.canChallengeWild4) return;
+      this.sendAction({ type: 'acceptWild4' });
     },
 
     /** @returns {void} */
     challengeWildDrawFour() {
-      if (!this.ws || !this.canChallengeWild4) return;
-      this.ws.send(JSON.stringify({ type: 'challengeWild4' }));
+      if (!this.canChallengeWild4) return;
+      this.sendAction({ type: 'challengeWild4' });
     },
 
     /**
@@ -1059,9 +1096,9 @@ document.addEventListener('alpine:init', () => {
 
     /** @returns {void} */
     callUno() {
-      if (!this.ws) return;
+      if (!this.canSend() || !this.canCallUno()) return;
       this.prepareAudio();
-      this.ws.send(JSON.stringify({ type: 'callUno' }));
+      this.sendAction({ type: 'callUno' });
     },
 
     /**
@@ -1077,10 +1114,9 @@ document.addEventListener('alpine:init', () => {
      * @returns {void}
      */
     catchUno(targetId) {
-      if (!this.ws) return;
       const target = this.gamePlayers.find(player => player.id === targetId);
       if (this.gameOver || !target || !this.isCatchable(target)) return;
-      this.ws.send(JSON.stringify({ type: 'catchUno', targetId }));
+      this.sendAction({ type: 'catchUno', targetId });
     },
 
     /** @returns {string} */
