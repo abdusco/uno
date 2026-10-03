@@ -1,6 +1,6 @@
 services:
   uno-party:
-    image: ghcr.io/abdusco/uno:v1.0.3
+    image: ghcr.io/abdusco/uno:v1.0.4
     ports:
       - "8080:8080"
     environment:

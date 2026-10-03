@@ -56,27 +56,35 @@ test('submitting during the handshake and duplicate recovery events keep one soc
   assert.equal(socket.sent.length, 1);
 });
 
-test('handshake and first authoritative snapshot have separate deadlines', () => {
+test('handshake and first authoritative snapshot time out after two seconds and retry', () => {
   for (const stage of ['opening', 'hello', 'playing']) {
     const f = browser();
     f.connection.join(hello);
     const socket = f.sockets[0];
     if (stage !== 'opening') {
-      f.advance(7500);
+      f.advance(1500);
       socket.open();
       socket.message({ type: 'heartbeat' });
       if (stage === 'playing') socket.message({ ...joined, roomStatus: 'playing' });
       assert.equal(f.connection.send({ type: 'start' }), false);
-      f.advance(4999);
+      f.advance(1999);
       assert.equal(f.connection.ws, socket);
       f.advance(1);
     } else {
-      f.advance(7999);
+      f.advance(1999);
       assert.equal(f.connection.ws, socket);
       f.advance(1);
     }
     assert.equal(f.connection.ws, null, stage);
     assert.ok(f.connection.retry, stage);
+    const delay = f.timers.get(f.connection.retry).delay;
+    assert.ok(delay >= 150 && delay <= 250);
+    f.advance(delay);
+    const current = f.connection.ws;
+    assert.notEqual(current, socket);
+    assert.equal(f.sockets.length, 2);
+    socket.emit('open'); socket.message(joined); socket.emit('error'); socket.emit('close');
+    assert.equal(f.connection.ws, current, 'timed-out sockets cannot disturb the retry');
   }
 });
 
@@ -89,7 +97,7 @@ test('playing rooms become ready only after state and new rounds wait for state 
   assert.equal(f.connection.send({ type: 'draw' }), true);
   socket.message({ type: 'started' });
   assert.equal(f.connection.send({ type: 'draw' }), false);
-  f.advance(5000);
+  f.advance(2000);
   assert.equal(f.connection.ws, null);
 });
 

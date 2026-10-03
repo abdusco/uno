@@ -114,7 +114,7 @@ class UnoConnection {
       return;
     }
     this.ws = ws;
-    this.armDeadline(ws, 8000);
+    this.armDeadline(ws, 2000);
     this.publish();
     ws.addEventListener('open', () => {
       if (this.ws !== ws) return;
@@ -151,7 +151,7 @@ class UnoConnection {
       }
       if (message.type === 'started') {
         this.phase = 'joining';
-        this.armDeadline(ws, 5000);
+        this.armDeadline(ws, 2000);
         this.publish();
       }
       this.deliver(message);
@@ -176,7 +176,7 @@ class UnoConnection {
 
   sendHello(ws) {
     this.phase = 'joining';
-    this.armDeadline(ws, 5000);
+    this.armDeadline(ws, 2000);
     this.publish();
     this.write(ws, this.hello);
   }
