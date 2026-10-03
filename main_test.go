@@ -75,6 +75,30 @@ func TestHandleWSRepliesToApplicationHeartbeat(t *testing.T) {
 	require.Equal(t, "pong", reply.Type)
 }
 
+func TestHandleWSKeepsTransportOpenBeforeHello(t *testing.T) {
+	reg := newRegistry()
+	e := echo.New()
+	e.GET("/ws", func(c echo.Context) error { return handleWS(c, reg) })
+	server := httptest.NewServer(e)
+	defer server.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	conn, _, err := websocket.Dial(ctx, "ws"+strings.TrimPrefix(server.URL, "http")+"/ws", nil)
+	require.NoError(t, err)
+	defer conn.CloseNow()
+	for i := 0; i < 3; i++ {
+		require.NoError(t, wsjson.Write(ctx, conn, clientMsg{Type: "ping"}))
+		var reply outMsg
+		require.NoError(t, wsjson.Read(ctx, conn, &reply))
+		require.Equal(t, "pong", reply.Type)
+	}
+	require.NoError(t, wsjson.Write(ctx, conn, clientMsg{Type: "hello", Name: "Alice", Create: true}))
+	var reply outMsg
+	require.NoError(t, wsjson.Read(ctx, conn, &reply))
+	require.Equal(t, "joined", reply.Type)
+	require.NotEmpty(t, reply.Token)
+}
+
 func TestHandleSession(t *testing.T) {
 	reg := newRegistry()
 	rm := reg.create("Test")

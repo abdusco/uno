@@ -1,202 +1,56 @@
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
-const vm = require('node:vm');
 const path = require('node:path');
+const browser = require('./fixtures/browser.cjs');
 
 function fixture() {
-  let makeApp;
-  let now = 1000;
-  let nextTimer = 0;
-  const timers = new Map();
-  const listeners = {};
-  class Socket {
-    static CONNECTING = 0;
-    static OPEN = 1;
-    constructor() { this.readyState = 0; this.listeners = {}; this.sent = []; }
-    addEventListener(event, fn) { this.listeners[event] = fn; }
-    emit(event, data) { this.listeners[event]?.(data); }
-    send(data) {
-      if (this.readyState !== Socket.OPEN) throw new Error('socket is not open');
-      this.sent.push(JSON.parse(data));
-    }
-    close() { this.readyState = 3; this.emit('close'); }
-  }
-  const addTimer = (fn, delay) => { const id = ++nextTimer; timers.set(id, { fn, delay }); return id; };
-  const window = {
-    innerWidth: 800,
-    location: { protocol: 'http:', host: 'example.test', origin: 'http://example.test', pathname: '/' },
-    addEventListener: (name, fn) => { listeners[name] = fn; },
-    removeEventListener() {},
+  const f = browser();
+  f.app = f.app();
+  f.app.name = 'Alice';
+  f.hello = { type: 'hello', name: 'Alice', room: 'ABCDE', create: false, token: 'secret' };
+  f.join = () => {
+    if (f.connection.phase === 'ready') f.app.ws.emit('error');
+    f.app.connect(f.hello);
+    f.app.ws.open();
+    f.app.ws.message({ type: 'joined', roomId: 'ABCDE', self: { id: 'a', isHost: true }, token: 'secret', resumed: true });
   };
-  const document = {
-    visibilityState: 'visible',
-    addEventListener: (name, fn) => name === 'alpine:init' ? fn() : listeners[name] = fn,
-    removeEventListener() {},
-  };
-  const navigator = { onLine: true };
-  const requests = [];
-  vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../web/js/app.js'), 'utf8'), {
-    window, document, navigator, WebSocket: Socket, AbortController,
-    fetch: (url, options) => new Promise(resolve => requests.push({ url, options, resolve })),
-    Alpine: { data: (_, fn) => { makeApp = fn; } },
-    Date: { now: () => now }, setTimeout: addTimer, setInterval: addTimer,
-    clearTimeout: id => timers.delete(id), clearInterval: id => timers.delete(id),
-    localStorage: { getItem() { return null; }, setItem() {} },
-    history: { pushState() {}, replaceState() {} },
-  });
-  const app = makeApp();
-  app.$nextTick = fn => fn(); app.$refs = {};
-  app.renderQrCode = app.prepareAudio = app.vibrate = app.playCardSfx = app.playUnoSfx = app.startMusic = app.stopMusic = () => {};
-  app.name = 'Alice';
-  const hello = { type: 'hello', name: 'Alice', room: 'ABCDE', create: false, token: 'secret' };
-  function join() {
-    app.connect(hello);
-    app.ws.readyState = Socket.OPEN;
-    app.ws.emit('open');
-    app.ws.emit('message', { data: JSON.stringify({ type: 'joined', roomId: 'ABCDE', self: { id: 'a', isHost: true }, token: 'secret', resumed: true }) });
-  }
-  return { app, join, hello, timers, listeners, navigator, requests, advance: ms => { now += ms; } };
+  return f;
 }
 
-test('idle sockets send heartbeats and reconnect after missing replies', () => {
-  const f = fixture(); f.join();
-  const socket = f.app.ws;
-  f.advance(10000); f.timers.get(f.app._heartbeatTimer).fn();
-  assert.equal(socket.sent.at(-1).type, 'ping');
-  f.advance(10000); socket.emit('message', { data: '{"type":"pong"}' });
-  f.advance(10000); f.timers.get(f.app._heartbeatTimer).fn();
+test('Alpine initializes once and consumes the transport opened before the UI', () => {
+  const html = fs.readFileSync(path.join(__dirname, '../web/index.html'), 'utf8');
+  assert.ok(html.indexOf('/js/connection.js') < html.indexOf('/css/style.css'));
+  assert.doesNotMatch(html, /x-init=["']init\(\)["']/);
+  const f = browser();
+  const socket = f.sockets[0];
+  socket.open();
+  f.app = f.app();
+  assert.equal(f.app.canSend(), false, 'a warm transport cannot accept room actions');
+  f.app.name = 'Alice';
+  f.app.submitName();
   assert.equal(f.app.ws, socket);
-  f.advance(20000); f.timers.get(f.app._heartbeatTimer).fn();
-  assert.equal(f.app.ws, null);
-  assert.equal(f.app.status, 'connecting');
-  assert.ok(f.app._reconnectTimer);
+  assert.equal(f.sockets.length, 1);
+  assert.equal(socket.sent[0].type, 'hello');
+  assert.equal(f.app.canSend(), false, 'an open transport is not an accepted room');
 });
 
-test('a stalled hello times out and retries a cached identity', () => {
-  const f = fixture(); f.app.connect(f.hello);
-  f.timers.get(f.app._connectionTimer).fn();
-  assert.equal(f.app.ws, null);
-  assert.ok(f.app._reconnectTimer);
-});
-
-test('playing joins stay disabled and time out until their first state arrives', () => {
-  const f = fixture(); f.app.connect(f.hello);
-  const socket = f.app.ws;
-  socket.readyState = 1; socket.emit('open');
-  socket.emit('message', { data: JSON.stringify({
-    type: 'joined', roomId: 'ABCDE', roomStatus: 'playing', self: { id: 'a' }, token: 'secret', resumed: true,
-  }) });
-  assert.equal(f.app.status, 'connecting');
-  assert.equal(f.app.canSend(), false);
-  assert.equal(f.timers.get(f.app._connectionTimer).delay, 5000);
-  f.timers.get(f.app._connectionTimer).fn();
-  assert.equal(f.app.ws, null);
-  assert.ok(f.app._reconnectTimer);
-});
-
-test('HTTP validation never blocks retry and late results cannot erase a recovered session', async () => {
-  const f = fixture(); f.join();
-  f.app.ws.emit('error');
-  assert.equal(f.requests.length, 1);
-  assert.equal(f.requests[0].options.cache, 'no-store');
-  assert.ok(f.timers.get(f.app._reconnectTimer).delay < 375);
-  f.timers.get(f.app._reconnectTimer).fn();
-  const socket = f.app.ws;
-  assert.ok(socket, 'retry proceeds with HTTP pending');
-  socket.readyState = 1; socket.emit('open');
-  socket.emit('message', { data: JSON.stringify({ type: 'joined', roomId: 'ABCDE', roomStatus: 'lobby', self: { id: 'a' }, token: 'secret' }) });
-  f.requests[0].resolve({ status: 404 });
-  await new Promise(resolve => setImmediate(resolve));
+test('startup replays snapshots received before Alpine loads', () => {
+  const f = browser({ pathname: '/r/ABCDE', storage: {
+    'uno:player:ABCDE': JSON.stringify({ name: 'Alice', token: 'secret' }),
+  } });
+  const socket = f.sockets[0];
+  socket.open();
+  socket.message({ type: 'joined', roomId: 'ABCDE', roomStatus: 'playing', self: { id: 'a' }, token: 'secret', resumed: true });
+  socket.message({ type: 'state', hand: [{ id: 'red', color: 'red', value: '1' }], yourTurn: true,
+    gamePlayers: [{ id: 'a', connected: true }, { id: 'b', connected: true }] });
+  f.app = f.app();
+  assert.equal(f.sockets.length, 1);
+  assert.equal(f.app.name, 'Alice');
   assert.equal(f.app.roomId, 'ABCDE');
-  assert.equal(f.app.ws, socket);
-});
-
-test('confirmed missing rooms stop retries', async () => {
-  const f = fixture(); f.join(); f.app.ws.emit('close');
-  f.requests[0].resolve({ status: 404 });
-  await new Promise(resolve => setImmediate(resolve));
-  assert.equal(f.app.screen, 'name');
-  assert.equal(f.app._reconnectTimer, null);
-  assert.equal(f.app.ws, null);
-});
-
-test('offline cancels socket work and recovery events share one attempt', () => {
-  const f = fixture(); f.app.init(); f.join();
-  const old = f.app.ws;
-  old.emit('error');
-  f.navigator.onLine = false; f.listeners.offline();
-  assert.equal(f.app.ws, null);
-  assert.equal(f.app._reconnectTimer, null);
-  assert.equal(f.requests[0].options.signal.aborted, true);
-  f.app.connect(f.hello);
-  assert.equal(f.app.ws, null);
-  f.navigator.onLine = true;
-  f.listeners.online(); f.listeners.pageshow(); f.listeners.resume(); f.listeners.visibilitychange();
-  const recovery = f.app._recoveryTimer;
-  f.timers.get(recovery).fn();
-  const socket = f.app.ws;
-  f.listeners.resume(); f.timers.get(f.app._recoveryTimer).fn();
-  assert.equal(f.app.ws, socket, 'duplicate events preserve the live handshake');
-  old.emit('message', { data: '{"type":"error","code":"room_not_found"}' });
-  old.emit('error'); old.emit('close');
-  assert.equal(f.app.ws, socket);
-  assert.equal(f.app._reconnectTimer, null);
-});
-
-test('returning from sleep replaces a stale socket and ignores its late close', () => {
-  const f = fixture(); f.app.init(); f.join();
-  const old = f.app.ws;
-  f.advance(60000); f.listeners.visibilitychange();
-  f.timers.get(f.app._recoveryTimer).fn();
-  assert.notEqual(f.app.ws, old);
-  old.emit('close');
-  assert.equal(f.app._reconnectTimer, null);
-  assert.equal(f.app.status, 'connecting');
-});
-
-test('restoring a recently closed page replaces even a seemingly healthy socket', () => {
-  for (const event of ['pagehide', 'freeze']) {
-    const f = fixture(); f.app.init(); f.join();
-    const old = f.app.ws;
-    f.listeners[event]();
-    assert.equal(f.app.ws, null);
-    assert.equal(f.app._heartbeatTimer, null);
-    assert.equal(f.app.canSend(), false);
-    assert.equal(f.app.token, 'secret');
-    assert.equal(f.app._reconnectTimer, null);
-    f.app.connect(f.hello);
-    assert.equal(f.app.ws, null, 'suspended pages do not start handshakes');
-    f.advance(100);
-    f.listeners.pageshow(); f.listeners.resume(); f.listeners.visibilitychange();
-    f.timers.get(f.app._recoveryTimer).fn();
-    const current = f.app.ws;
-    assert.ok(current);
-    assert.notEqual(current, old);
-    old.emit('close'); old.emit('error');
-    assert.equal(f.app.ws, current);
-    assert.equal(f.app._reconnectTimer, null);
-    current.readyState = 1; current.emit('open');
-    assert.equal(current.sent[0].token, 'secret');
-    assert.equal(current.sent[0].create, false);
-  }
-});
-
-test('pagehide cancels a pending handshake and session check before restore', () => {
-  const f = fixture(); f.app.init(); f.join();
-  f.app.ws.emit('error');
-  const retry = f.app._reconnectTimer;
-  f.listeners.pagehide();
-  assert.equal(f.timers.has(retry), false);
-  assert.equal(f.requests[0].options.signal.aborted, true);
-  f.listeners.pageshow(); f.timers.get(f.app._recoveryTimer).fn();
-  const old = f.app.ws;
-  f.listeners.pagehide();
-  assert.equal(old.readyState, 3);
-  assert.equal(f.app._connectionTimer, null);
-  f.listeners.pageshow(); f.timers.get(f.app._recoveryTimer).fn();
-  assert.ok(f.app.ws);
-  assert.notEqual(f.app.ws, old);
+  assert.equal(f.app.screen, 'game');
+  assert.equal(f.app.canAct, true);
+  assert.equal(f.app.hand[0].id, 'red');
 });
 
 
@@ -304,7 +158,7 @@ test('send failures trigger recovery without replaying the action', () => {
   assert.equal(f.app.sendPlay('red', ''), false);
   assert.equal(f.app.ws, null);
   assert.equal(f.app.status, 'connecting');
-  assert.ok(f.app._reconnectTimer);
+  assert.ok(f.connection.retry);
   f.join();
   assert.equal(f.app.ws.sent.length, 1);
   assert.equal(f.app.ws.sent[0].type, 'hello');

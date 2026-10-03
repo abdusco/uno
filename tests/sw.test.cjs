@@ -12,7 +12,7 @@ test('installed shell starts from its versioned cache without a network request'
   vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../web/sw.js'), 'utf8'), {
     self: { location: { origin: 'https://example.test' }, addEventListener: (name, fn) => { listeners[name] = fn; } },
     URL,
-    caches: { open: async name => { cacheNames.push(name); return { match: async key => key === '/index.html' ? shell : null }; } },
+    caches: { open: async name => { cacheNames.push(name); return { match: async key => key === '/' ? shell : null }; } },
     fetch: () => { networkCalls++; throw new Error('network stalled'); },
   });
   for (const route of ['/', '/r/ABCDE']) {
@@ -21,7 +21,7 @@ test('installed shell starts from its versioned cache without a network request'
     assert.equal(await response, shell);
   }
   assert.equal(networkCalls, 0);
-  assert.ok(cacheNames.every(name => name === 'uno-party-v35'));
+  assert.ok(cacheNames.every(name => name === 'uno-party-v36'));
   let intercepted = false;
   listeners.fetch({ request: { url: 'https://example.test/api/session/ABCDE', method: 'GET' }, respondWith: () => { intercepted = true; } });
   assert.equal(intercepted, false, 'session validation bypasses the cache');
@@ -39,5 +39,8 @@ test('a shell update bypasses stale browser HTTP cache entries', async () => {
   listeners.install({ waitUntil: promise => { installed = promise; } });
   await installed;
   assert.ok(assets.some(request => request.url === '/js/app.js'));
+  assert.ok(assets.some(request => request.url === '/js/connection.js'));
+  assert.ok(assets.some(request => request.url === '/'));
+  assert.ok(!assets.some(request => request.url === '/index.html'), 'Go redirects index.html; redirected responses cannot serve navigations');
   assert.ok(assets.every(request => request.cache === 'reload'));
 });

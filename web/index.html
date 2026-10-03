@@ -3,6 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <script src="/js/connection.js"></script>
   <title>uno:party</title>
 
   <link rel="manifest" href="/manifest.json">
@@ -17,7 +18,7 @@
 </head>
 <body>
 
-  <main id="app" x-data="unoParty" x-init="init()" x-cloak :class="{ 'app--game': screen === 'game' }">
+  <main id="app" x-data="unoParty" x-cloak :class="{ 'app--game': screen === 'game' }">
 
     <!-- connecting / auto-reconnecting overlay -->
     <div class="overlay" x-show="status === 'connecting'" x-cloak>

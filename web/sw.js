@@ -1,9 +1,9 @@
-const CACHE_NAME = 'uno-party-v35';
+const CACHE_NAME = 'uno-party-v36';
 const SHELL_ASSETS = [
   '/',
-  '/index.html',
   '/css/style.css',
   '/js/app.js',
+  '/js/connection.js',
   '/vendor/alpine.min.js',
   '/vendor/qrcode.js',
   '/manifest.json',
@@ -60,7 +60,7 @@ self.addEventListener('fetch', (event) => {
   if (request.mode === 'navigate') {
     event.respondWith(
       caches.open(CACHE_NAME).then(async (cache) =>
-        (await cache.match('/index.html')) || fetch(request)
+        (await cache.match('/')) || fetch(request)
       )
     );
     return;

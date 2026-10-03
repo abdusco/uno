@@ -138,24 +138,8 @@ document.addEventListener('alpine:init', () => {
     copied: false,
     errorMsg: '',
 
-    // --- reconnection ---
-    // The latest hello is kept for retrying a cached identity before
-    // the server has accepted our room session.
-    /** @type {HelloMsg|null} */
-    _firstHello: null,
     reconnectAttempts: 0,
-    /** @type {number|null} */
-    _reconnectTimer: null,
-    _connectionTimer: null,
-    _heartbeatTimer: null,
-    _lastMessageAt: 0,
-    _recoverConnection: null,
-    _goOffline: null,
-    _suspendConnection: null,
-    _suspended: false,
-    _recoveryTimer: null,
-    _validation: null,
-    _validationTimer: null,
+    connectionReady: false,
     _gameSynced: false,
     // opaque secret handed back on "joined" - cached in localStorage
     // (keyed by room code) so a dropped connection or a full page reload
@@ -213,42 +197,6 @@ document.addEventListener('alpine:init', () => {
 
     /** @returns {void} */
     init() {
-      this._recoverConnection = () => {
-        if (document.visibilityState === 'hidden' || navigator.onLine === false) return;
-        this._suspended = false;
-        if (!this.roomId && !this._firstHello) return;
-        if (this._recoveryTimer !== null) return;
-        this._recoveryTimer = setTimeout(() => {
-          this._recoveryTimer = null;
-          if (navigator.onLine === false || document.visibilityState === 'hidden') return;
-          // Coalesce lifecycle events without restarting a live handshake.
-          if (this.ws?.readyState === WebSocket.OPEN && Date.now() - this._lastMessageAt < 30000) return;
-          if (this.ws?.readyState === WebSocket.CONNECTING && Date.now() - this._lastMessageAt < 5000) return;
-          this.reconnectAttempts = 0;
-          this.connect(this.buildReconnectHello());
-        }, 100);
-      };
-      this._suspendConnection = () => {
-        this._suspended = true;
-        clearTimeout(this._reconnectTimer);
-        clearTimeout(this._recoveryTimer);
-        this._reconnectTimer = this._recoveryTimer = null;
-        this.cancelValidation();
-        this.stopConnectionTimers();
-        const ws = this.ws;
-        this.ws = null;
-        this._gameSynced = false;
-        if (ws) ws.close();
-        if (this._firstHello) this.status = 'connecting';
-      };
-      this._goOffline = this._suspendConnection;
-      window.addEventListener('online', this._recoverConnection);
-      window.addEventListener('offline', this._goOffline);
-      window.addEventListener('pageshow', this._recoverConnection);
-      window.addEventListener('pagehide', this._suspendConnection);
-      document.addEventListener('freeze', this._suspendConnection);
-      document.addEventListener('resume', this._recoverConnection);
-      document.addEventListener('visibilitychange', this._recoverConnection);
       this.registerServiceWorker();
       try {
         this.musicEnabled = localStorage.getItem('uno:music') !== 'off';
@@ -258,27 +206,16 @@ document.addEventListener('alpine:init', () => {
       const match = window.location.pathname.match(/^\/r\/([A-Za-z0-9]{4,8})$/);
       if (match) {
         this.joiningRoom = match[1].toUpperCase();
-        const cached = this.loadCachedIdentity(this.joiningRoom);
-        if (cached) {
-          this.name = cached.name;
-          this.connect({ type: 'hello', name: cached.name, room: this.joiningRoom, create: false, token: cached.token });
-          return;
-        }
+        this.name = window.unoConnection.hello?.name || '';
       }
+      window.unoConnection.subscribe(({ ws, status, ready, attempts }) => {
+        this.ws = ws;
+        this.status = status;
+        this.connectionReady = ready;
+        this.reconnectAttempts = attempts;
+        if (status !== 'ready') this._gameSynced = false;
+      }, message => this.handleMessage(message));
       this.$nextTick(() => this.$refs.nameInput && this.$refs.nameInput.focus());
-    },
-
-    /**
-     * @param {string} roomCode
-     * @returns {{token: string, name: string}|null}
-     */
-    loadCachedIdentity(roomCode) {
-      try {
-        const raw = localStorage.getItem(`uno:player:${roomCode}`);
-        return raw ? JSON.parse(raw) : null;
-      } catch {
-        return null; // private browsing, storage disabled, corrupt JSON, etc.
-      }
     },
 
     /**
@@ -334,191 +271,15 @@ document.addEventListener('alpine:init', () => {
       this.connect({ type: 'hello', name: this.name.trim(), room: code, create: false });
     },
 
-    /**
-     * @param {HelloMsg} helloMsg
-     * @returns {void}
-     */
+    /** @param {HelloMsg} helloMsg */
     connect(helloMsg) {
-      this._firstHello = helloMsg;
-      this._gameSynced = false;
-      this.stopConnectionTimers();
-      if (this._reconnectTimer) {
-        clearTimeout(this._reconnectTimer);
-        this._reconnectTimer = null;
-      }
-
-      this.status = 'connecting';
-      if (navigator.onLine === false || this._suspended) {
-        const previous = this.ws;
-        this.ws = null;
-        if (previous) previous.close();
-        return;
-      }
-      const proto = window.location.protocol === 'https:' ? 'wss' : 'ws';
-      // Captured by reference in every listener below, so a stale socket
-      // from a superseded connection attempt can tell it's been replaced
-      // and no-op instead of acting - without this guard, an old socket's
-      // *own* eventual 'close' (it's still a live object even once
-      // abandoned; nothing unsubscribes its listeners) fires
-      // scheduleReconnect() again even after a newer connection already
-      // succeeded, which reconnects, gets kicked because that same-token
-      // takeover naturally displaces this tab's own newest connection,
-      // fires *that* socket's 'close' too, and so on - an unbounded
-      // reconnect ping-pong with nothing ever wrong on the network.
-      const ws = new WebSocket(`${proto}://${window.location.host}/ws`);
-      const previous = this.ws;
-      this.ws = ws;
-      if (previous) previous.close();
-      this._lastMessageAt = Date.now();
-      this._connectionTimer = setTimeout(() => this.connectionLost(ws), 5000);
-
-      ws.addEventListener('open', () => {
-        if (this.ws !== ws) return;
-        clearTimeout(this._connectionTimer);
-        this._connectionTimer = setTimeout(() => this.connectionLost(ws), 5000);
-        try {
-          ws.send(JSON.stringify(helloMsg));
-        } catch {
-          this.connectionLost(ws);
-        }
-      });
-
-      ws.addEventListener('message', (event) => {
-        if (this.ws !== ws) return;
-        this._lastMessageAt = Date.now();
-        this.handleMessage(JSON.parse(event.data));
-      });
-
-      ws.addEventListener('close', () => this.connectionLost(ws));
-
-      ws.addEventListener('error', () => {
-        this.connectionLost(ws);
-      });
-    },
-
-    /** @returns {void} */
-    stopConnectionTimers() {
-      clearTimeout(this._connectionTimer);
-      clearInterval(this._heartbeatTimer);
-      this._connectionTimer = null;
-      this._heartbeatTimer = null;
-    },
-
-    /** @param {WebSocket} ws */
-    connectionLost(ws) {
-      if (this.ws !== ws) return;
-      this.ws = null;
-      this._gameSynced = false;
-      this.stopConnectionTimers();
-      ws.close();
-      if (this.roomId || this._firstHello?.token) {
-        this.scheduleReconnect();
-        this.validateSession();
-      } else {
-        this.status = 'ready';
-        this.errorMsg = 'Could not connect. Please try again.';
-      }
-    },
-
-    /** @returns {void} */
-    startHeartbeat() {
-      clearInterval(this._heartbeatTimer);
-      const ws = this.ws;
-      this._heartbeatTimer = setInterval(() => {
-        if (this.ws !== ws) return;
-        if (ws.readyState !== WebSocket.OPEN || Date.now() - this._lastMessageAt >= 30000) {
-          this.connectionLost(ws);
-          return;
-        }
-        try {
-          ws.send(JSON.stringify({ type: 'ping' }));
-        } catch {
-          this.connectionLost(ws);
-        }
-      }, 10000);
+      window.unoConnection.join(helloMsg);
     },
 
     /** @returns {void} */
     destroy() {
-      window.removeEventListener('online', this._recoverConnection);
-      window.removeEventListener('offline', this._goOffline);
-      window.removeEventListener('pageshow', this._recoverConnection);
-      window.removeEventListener('pagehide', this._suspendConnection);
-      document.removeEventListener('freeze', this._suspendConnection);
-      document.removeEventListener('resume', this._recoverConnection);
-      document.removeEventListener('visibilitychange', this._recoverConnection);
-      clearTimeout(this._reconnectTimer);
-      clearTimeout(this._recoveryTimer);
-      this.cancelValidation();
-      this.stopConnectionTimers();
-      const ws = this.ws;
-      this.ws = null;
-      if (ws) ws.close();
+      window.unoConnection.destroy();
       this.stopMusic();
-    },
-
-    /** @returns {void} */
-    scheduleReconnect() {
-      this.status = 'connecting';
-      if (navigator.onLine === false || this._suspended || this._reconnectTimer !== null) return;
-      const delayMs = Math.min(250 * 2 ** Math.min(this.reconnectAttempts, 6), 10000) * (0.75 + Math.random() * 0.5);
-      this.reconnectAttempts++;
-      this._reconnectTimer = setTimeout(() => {
-        this._reconnectTimer = null;
-        this.connect(this.buildReconnectHello());
-      }, delayMs);
-    },
-
-    cancelValidation() {
-      this._validation?.abort();
-      this._validation = null;
-      clearTimeout(this._validationTimer);
-      this._validationTimer = null;
-    },
-
-    async validateSession() {
-      const hello = this.buildReconnectHello();
-      if (!hello?.room || !hello.token || this._validation || navigator.onLine === false) return;
-      const controller = new AbortController();
-      this._validation = controller;
-      this._validationTimer = setTimeout(() => this.cancelValidation(), 4000);
-      try {
-        const response = await fetch(`/api/session/${encodeURIComponent(hello.room)}`, {
-          cache: 'no-store', signal: controller.signal,
-          headers: { Authorization: `Bearer ${hello.token}` },
-        });
-        if (this._validation !== controller || this.status === 'ready' ||
-            this.buildReconnectHello()?.token !== hello.token) return;
-        if (response.status === 404 || response.status === 401) {
-          this.resetMissingRoom();
-          if (response.status === 401) this.errorMsg = 'Your session has expired. Join the room again.';
-        }
-      } catch {
-        // HTTP failures do not affect the independent socket retry loop.
-      } finally {
-        if (this._validation === controller) this.cancelValidation();
-      }
-    },
-
-    markSynchronized() {
-      clearTimeout(this._connectionTimer);
-      this._connectionTimer = null;
-      this.cancelValidation();
-      this.status = 'ready';
-      this.reconnectAttempts = 0;
-    },
-
-    /**
-     * Rejoining after a drop must always join-by-code, never re-create a
-     * room - re-sending the original "create" hello would spin up a
-     * second, empty room instead of rejoining the one already in play.
-     * @returns {HelloMsg}
-     */
-    buildReconnectHello() {
-      if (this.roomId) {
-        return { type: 'hello', name: this.name.trim(), room: this.roomId, create: false, token: this.token };
-      }
-      return this._firstHello;
     },
 
     /**
@@ -531,12 +292,6 @@ document.addEventListener('alpine:init', () => {
         case 'pong':
           break;
         case 'joined':
-          this.startHeartbeat();
-          // Keep backoff until the room's authoritative snapshot arrives.
-          this.cancelValidation();
-          // joined is a complete lobby snapshot. Playing rooms require the
-          // personalized state that follows, under the existing deadline.
-          if (msg.roomStatus !== 'playing') this.markSynchronized();
           this.roomId = msg.roomId;
           this.selfId = msg.self.id;
           this.isHost = msg.self.isHost;
@@ -567,10 +322,6 @@ document.addEventListener('alpine:init', () => {
           break;
         case 'started':
           this._gameSynced = false;
-          this.status = 'connecting';
-          const startedSocket = this.ws;
-          clearTimeout(this._connectionTimer);
-          this._connectionTimer = setTimeout(() => this.connectionLost(startedSocket), 5000);
           this.pendingWildCard = null;
           this.gameOver = null;
           this.errorMsg = '';
@@ -609,7 +360,6 @@ document.addEventListener('alpine:init', () => {
           this.yourDrawnCard = msg.yourDrawnCard || null;
           this.canChallengeWild4 = !!msg.canChallengeWild4;
           this._gameSynced = true;
-          this.markSynchronized();
           if (this.pendingWildCard && (!this.yourTurn || this.canChallengeWild4 ||
             !this.hand.some(card => card.id === this.pendingWildCard.id) ||
             (this.yourDrawnCard && this.yourDrawnCard.id !== this.pendingWildCard.id))) {
@@ -648,8 +398,8 @@ document.addEventListener('alpine:init', () => {
           }
           break;
         case 'error':
+          if (['room_not_found', 'session_invalid'].includes(msg.code)) this.resetMissingRoom();
           this.errorMsg = msg.message || 'Something went wrong.';
-          if (msg.code === 'room_not_found' && (this.joiningRoom || this.roomId)) this.resetMissingRoom();
           break;
       }
     },
@@ -662,30 +412,20 @@ document.addEventListener('alpine:init', () => {
      * @returns {void}
      */
     resetMissingRoom() {
-      this.cancelValidation();
-      this.stopConnectionTimers();
-      const missingRoom = this.roomId || this.joiningRoom || this._firstHello?.room;
+      const missingRoom = this.roomId || this.joiningRoom;
       this.clearCachedIdentity(missingRoom);
-      if (this.ws) {
-        const staleSocket = this.ws;
-        this.ws = null;
-        staleSocket.close();
-      }
-      if (this._reconnectTimer) {
-        clearTimeout(this._reconnectTimer);
-        this._reconnectTimer = null;
-      }
+      window.unoConnection.reset();
       this.joiningRoom = null;
       this.roomId = '';
       this.selfId = '';
       this.token = '';
-      this._firstHello = null;
       this.reconnectAttempts = 0;
       this.status = 'ready';
       this.screen = 'name';
       this.players = [];
       this.gamePlayers = [];
       this.hand = [];
+      this._gameSynced = false;
       this.canChallengeWild4 = false;
       this.gameOver = null;
       this.errorMsg = 'That room no longer exists. Create a new room or join one with a code.';
@@ -702,7 +442,7 @@ document.addEventListener('alpine:init', () => {
 
     /** @returns {boolean} */
     canSend() {
-      return this.status === 'ready' && this.ws?.readyState === WebSocket.OPEN;
+      return this.connectionReady && this.status === 'ready' && this.ws?.readyState === WebSocket.OPEN;
     },
 
     /** @returns {boolean} whether the current game can accept an action */
@@ -720,14 +460,7 @@ document.addEventListener('alpine:init', () => {
     sendAction(msg) {
       if (!this.canSend()) return false;
       if (msg.type !== 'start' && !this.canAct) return false;
-      const ws = this.ws;
-      try {
-        ws.send(JSON.stringify(msg));
-        return true;
-      } catch {
-        this.connectionLost(ws);
-        return false;
-      }
+      return window.unoConnection.send(msg);
     },
 
     /** @returns {void} */

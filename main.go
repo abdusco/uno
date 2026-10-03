@@ -162,14 +162,25 @@ func handleWS(c echo.Context, reg *registry) error {
 	}
 	defer closeOnce.Do(func() { conn.CloseNow() })
 
-	// First message from the client must declare intent: create a room,
-	// or join one by code, along with the player's display name.
+	// The shell opens a transport before the player enters a name. Keep it
+	// alive with ping/pong until hello declares the room/session to join.
 	var first clientMsg
-	readCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
-	err = wsjson.Read(readCtx, conn, &first)
-	cancel()
-	if err != nil {
-		return nil
+	for {
+		readCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+		err = wsjson.Read(readCtx, conn, &first)
+		cancel()
+		if err != nil {
+			return nil
+		}
+		if first.Type != "ping" {
+			break
+		}
+		writeCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+		err = wsjson.Write(writeCtx, conn, outMsg{Type: "pong"})
+		cancel()
+		if err != nil {
+			return nil
+		}
 	}
 	if first.Type != "hello" || first.Name == "" {
 		writeClientError(ctx, conn, ErrProtocolViolation{Message: "expected hello with a name"})
