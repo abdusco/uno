@@ -37,13 +37,14 @@ func newRoomCode() string {
 // are grouped by which message Type they belong to; unused ones are simply
 // omitted from the JSON via omitempty.
 type outMsg struct {
-	Type     string       `json:"type"`
-	Code     string       `json:"code,omitempty"`
-	RoomID   string       `json:"roomId,omitempty"`
-	RoomName string       `json:"roomName,omitempty"`
-	Self     *playerView  `json:"self,omitempty"`
-	Players  []playerView `json:"players,omitempty"`
-	Message  string       `json:"message,omitempty"`
+	Type       string       `json:"type"`
+	Code       string       `json:"code,omitempty"`
+	RoomID     string       `json:"roomId,omitempty"`
+	RoomName   string       `json:"roomName,omitempty"`
+	RoomStatus string       `json:"roomStatus,omitempty"`
+	Self       *playerView  `json:"self,omitempty"`
+	Players    []playerView `json:"players,omitempty"`
+	Message    string       `json:"message,omitempty"`
 
 	// type "state" - a personalized snapshot of an in-progress game.
 	Hand            []Card           `json:"hand,omitempty"`
@@ -133,10 +134,11 @@ type room struct {
 
 	game *gameState // nil until the first "start"
 
-	joinCh   chan *joinReq
-	leaveCh  chan leaveReq
-	actionCh chan roomAction
-	doneCh   chan struct{}
+	joinCh    chan *joinReq
+	leaveCh   chan leaveReq
+	actionCh  chan roomAction
+	sessionCh chan sessionReq
+	doneCh    chan struct{}
 	// syncCh is test-only: closing the channel it's handed proves every
 	// message sent to the room before this one has been fully processed,
 	// not merely received (channel sends unblock the instant the select
@@ -153,6 +155,11 @@ type joinReq struct {
 	token  string // non-empty means "try to resume this identity first"
 	kick   func()
 	result chan *joinResult
+}
+
+type sessionReq struct {
+	token  string
+	result chan bool
 }
 
 type joinResult struct {
@@ -186,17 +193,18 @@ func newRoom(id, name string) *room {
 
 func newRoomWithExpiry(id, name string, idleTTL time.Duration, onExpire func(*room)) *room {
 	r := &room{
-		id:       id,
-		name:     name,
-		status:   "lobby",
-		players:  make(map[string]*player),
-		joinCh:   make(chan *joinReq),
-		leaveCh:  make(chan leaveReq),
-		actionCh: make(chan roomAction),
-		doneCh:   make(chan struct{}),
-		syncCh:   make(chan chan struct{}),
-		idleTTL:  idleTTL,
-		onExpire: onExpire,
+		id:        id,
+		name:      name,
+		status:    "lobby",
+		players:   make(map[string]*player),
+		joinCh:    make(chan *joinReq),
+		leaveCh:   make(chan leaveReq),
+		actionCh:  make(chan roomAction),
+		sessionCh: make(chan sessionReq),
+		doneCh:    make(chan struct{}),
+		syncCh:    make(chan chan struct{}),
+		idleTTL:   idleTTL,
+		onExpire:  onExpire,
 	}
 	go r.run()
 	return r
@@ -243,6 +251,9 @@ func (r *room) run() {
 			refreshExpiry()
 		case act := <-r.actionCh:
 			r.handleAction(act)
+		case req := <-r.sessionCh:
+			_, valid := r.findByToken(req.token)
+			req.result <- valid
 		case <-expiry:
 			if r.onExpire != nil {
 				r.onExpire(r)
@@ -285,7 +296,7 @@ func (r *room) handleJoin(req *joinReq) {
 			req.result <- &joinResult{player: p, sendCh: p.send, connGen: p.connGen, reconnected: true}
 
 			p.send <- outMsg{
-				Type: "joined", RoomID: r.id, RoomName: r.name,
+				Type: "joined", RoomID: r.id, RoomName: r.name, RoomStatus: r.status,
 				Self: r.viewOf(p), Players: r.playerViews(),
 				Token: p.token, Resumed: true,
 			}
@@ -356,7 +367,7 @@ func (r *room) handleJoin(req *joinReq) {
 	req.result <- &joinResult{player: p, sendCh: p.send, connGen: p.connGen}
 
 	// Tell the new player who they are and who else is here.
-	p.send <- outMsg{Type: "joined", RoomID: r.id, RoomName: r.name, Self: r.viewOf(p), Players: r.playerViews(), Token: p.token}
+	p.send <- outMsg{Type: "joined", RoomID: r.id, RoomName: r.name, RoomStatus: "lobby", Self: r.viewOf(p), Players: r.playerViews(), Token: p.token}
 	r.broadcastPlayers()
 }
 

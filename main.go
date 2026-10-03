@@ -43,6 +43,9 @@ func main() {
 	e.GET("/ws", func(c echo.Context) error {
 		return handleWS(c, reg)
 	})
+	e.GET("/api/session/:code", func(c echo.Context) error {
+		return handleSession(c, reg)
+	})
 	e.GET("/r/:code", func(c echo.Context) error {
 		if reg.get(c.Param("code")) == nil {
 			return c.Redirect(http.StatusFound, "/")
@@ -64,6 +67,34 @@ func main() {
 	log.Printf("uno-party listening on :%s", port)
 	if err := e.Start(":" + port); err != nil {
 		log.Fatal(err)
+	}
+}
+
+// Session checks run only after a socket failure and never delay a reconnect.
+func handleSession(c echo.Context, reg *registry) error {
+	c.Response().Header().Set("Cache-Control", "no-store")
+	rm := reg.get(c.Param("code"))
+	if rm == nil {
+		return c.JSON(http.StatusNotFound, map[string]string{"code": "room_not_found"})
+	}
+	ctx, cancel := context.WithTimeout(c.Request().Context(), 3*time.Second)
+	defer cancel()
+	req := sessionReq{token: strings.TrimPrefix(c.Request().Header.Get("Authorization"), "Bearer "), result: make(chan bool, 1)}
+	select {
+	case rm.sessionCh <- req:
+	case <-rm.doneCh:
+		return c.JSON(http.StatusNotFound, map[string]string{"code": "room_not_found"})
+	case <-ctx.Done():
+		return c.NoContent(http.StatusServiceUnavailable)
+	}
+	select {
+	case valid := <-req.result:
+		if !valid {
+			return c.JSON(http.StatusUnauthorized, map[string]string{"code": "session_invalid"})
+		}
+		return c.NoContent(http.StatusNoContent)
+	case <-ctx.Done():
+		return c.NoContent(http.StatusServiceUnavailable)
 	}
 }
 
@@ -191,7 +222,21 @@ func handleWS(c echo.Context, reg *registry) error {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		for msg := range jr.sendCh {
+		heartbeat := time.NewTicker(10 * time.Second)
+		defer heartbeat.Stop()
+		for {
+			var msg outMsg
+			select {
+			case next, ok := <-jr.sendCh:
+				if !ok {
+					return
+				}
+				msg = next
+			case <-heartbeat.C:
+				msg = outMsg{Type: "heartbeat"}
+			case <-ctx.Done():
+				return
+			}
 			writeCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 			err := wsjson.Write(writeCtx, conn, msg)
 			cancel()

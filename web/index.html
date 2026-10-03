@@ -90,7 +90,7 @@
         </ul>
 
         <button class="btn btn--primary" x-show="isHost"
-                @click="startGame()" :disabled="players.length < 2">
+                @click="startGame()" :disabled="!canSend() || players.length < 2">
           Start game
         </button>
         <p class="hint" x-show="isHost && players.length < 2">Waiting for at least one more player…</p>

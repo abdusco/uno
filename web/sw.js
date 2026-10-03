@@ -1,4 +1,4 @@
-const CACHE_NAME = 'uno-party-v33';
+const CACHE_NAME = 'uno-party-v34';
 const SHELL_ASSETS = [
   '/',
   '/index.html',
@@ -53,37 +53,27 @@ self.addEventListener('fetch', (event) => {
   if (request.url.startsWith('ws:') || request.url.startsWith('wss:')) return;
   if (request.method !== 'GET') return;
 
-  // Always ask the server for page navigations first. It already maps room
-  // URLs such as /r/ABCDE to the app shell, and using the network prevents a
-  // missing or stale cache entry from turning a valid invite into ERR_FAILED.
-  // The cached shell is only an offline fallback.
+  // A version's HTML and scripts stay together. Room/session validation is
+  // performed by the app; launching the installed PWA never waits on HTTP.
   if (request.mode === 'navigate') {
     event.respondWith(
-      fetch(request)
-        .then(async (response) => {
-          if (response.ok) {
-            const copy = response.clone();
-            const cache = await caches.open(CACHE_NAME);
-            await cache.put('/index.html', copy);
-          }
-          return response;
-        })
-        .catch(async () => {
-          const cached = await caches.match('/index.html');
-          return cached || Response.error();
-        })
+      caches.open(CACHE_NAME).then(async (cache) =>
+        (await cache.match('/index.html')) || fetch(request)
+      )
     );
     return;
   }
 
-  // Shell assets: cache-first, falling back to network.
+  // Only shell assets belong in this cache. Session checks always use HTTP.
+  if (!SHELL_ASSETS.includes(requestURL.pathname)) return;
   event.respondWith(
-    caches.match(request).then((cached) => {
+    caches.open(CACHE_NAME).then(async (cache) => {
+      const cached = await cache.match(request);
       if (cached) return cached;
-      return fetch(request).then((response) => {
+      return fetch(request).then(async (response) => {
         if (response.ok) {
           const copy = response.clone();
-          caches.open(CACHE_NAME).then((cache) => cache.put(request, copy));
+          await cache.put(request, copy);
         }
         return response;
       });

@@ -74,3 +74,37 @@ func TestHandleWSRepliesToApplicationHeartbeat(t *testing.T) {
 	require.NoError(t, wsjson.Read(ctx, conn, &reply))
 	require.Equal(t, "pong", reply.Type)
 }
+
+func TestHandleSession(t *testing.T) {
+	reg := newRegistry()
+	rm := reg.create("Test")
+	joined := make(chan *joinResult, 1)
+	rm.joinCh <- &joinReq{name: "Alice", asHost: true, result: joined}
+	player := (<-joined).player
+	e := echo.New()
+	for _, tc := range []struct {
+		name   string
+		room   string
+		token  string
+		status int
+	}{
+		{name: "valid session", room: rm.id, token: player.token, status: http.StatusNoContent},
+		{name: "missing room", room: "MISSING", token: player.token, status: http.StatusNotFound},
+		{name: "invalid token", room: rm.id, token: "invalid", status: http.StatusUnauthorized},
+		{name: "missing token", room: rm.id, status: http.StatusUnauthorized},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodGet, "/api/session/"+tc.room, nil)
+			if tc.token != "" {
+				req.Header.Set("Authorization", "Bearer "+tc.token)
+			}
+			rec := httptest.NewRecorder()
+			c := e.NewContext(req, rec)
+			c.SetParamNames("code")
+			c.SetParamValues(tc.room)
+			require.NoError(t, handleSession(c, reg))
+			require.Equal(t, tc.status, rec.Code)
+			require.Equal(t, "no-store", rec.Header().Get("Cache-Control"))
+		})
+	}
+}

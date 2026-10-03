@@ -40,7 +40,7 @@ jobs:
       - name: Go vet
         run: go vet ./...
       - name: JavaScript tests
-        run: node --test tests/app.test.cjs
+        run: node --test tests/*.test.cjs
 
   publish:
     needs: test
