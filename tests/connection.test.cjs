@@ -187,14 +187,123 @@ test('offline cancels socket, retry, heartbeat, and session validation work', ()
   assert.equal(f.sockets.length, 2);
 });
 
-test('foreground, page restoration, and resume replace suspended sockets without duplicate attempts', () => {
-  for (const event of ['hidden', 'pagehide', 'freeze']) {
+test('tab switches keep healthy sockets and the UI ready while checking liveness', () => {
+  for (const reply of ['pong', 'heartbeat', 'players']) {
+    const f = browser(); f.connection.join(hello);
+    const socket = f.sockets[0]; socket.open(); socket.message(joined);
+    const statuses = [];
+    f.connection.subscribe(change => statuses.push(change.status), () => {});
+    f.document.visibilityState = 'hidden'; f.event('document', 'visibilitychange');
+    f.advance(500);
+    f.document.visibilityState = 'visible'; f.event('document', 'visibilitychange');
+    f.event('document', 'resume'); f.event('window', 'pageshow');
+    assert.equal(f.sockets.length, 1);
+    assert.equal(socket.sent.at(-1).type, 'ping');
+    assert.equal(socket.sent.filter(message => message.type === 'ping').length, 1);
+    assert.equal(f.connection.phase, 'ready');
+    f.advance(100); socket.message({ type: reply });
+    f.advance(1000);
+    assert.equal(f.connection.ws, socket);
+    assert.equal(f.connection.probe, null);
+    assert.ok(statuses.every(status => status === 'ready'));
+    assert.equal(f.connection.send({ type: 'start' }), true);
+  }
+});
+
+test('tab switches preserve an opening socket and a pending hello or snapshot', () => {
+  for (const stage of ['opening', 'hello', 'playing']) {
+    const f = browser(); f.connection.join(hello);
+    const socket = f.sockets[0];
+    if (stage !== 'opening') socket.open();
+    if (stage === 'playing') socket.message({ ...joined, roomStatus: 'playing' });
+    f.document.visibilityState = 'hidden'; f.event('document', 'visibilitychange');
+    f.advance(500);
+    f.document.visibilityState = 'visible'; f.event('document', 'visibilitychange');
+    assert.equal(f.connection.ws, socket);
+    assert.equal(f.connection.probe, null);
+    if (stage === 'opening') socket.open();
+    if (stage !== 'playing') socket.message(joined);
+    else socket.message({ type: 'state' });
+    f.advance(2000);
+    assert.equal(f.connection.ws, socket);
+    assert.equal(f.connection.phase, 'ready');
+  }
+});
+
+test('an unresponsive foreground socket is replaced after one second without retry backoff', () => {
+  const f = browser(); f.connection.join(hello);
+  const old = f.sockets[0]; old.open(); old.message(joined);
+  f.document.visibilityState = 'hidden'; f.event('document', 'visibilitychange');
+  f.document.visibilityState = 'visible'; f.event('document', 'visibilitychange');
+  f.advance(999);
+  assert.equal(f.connection.ws, old);
+  f.advance(1);
+  const current = f.connection.ws;
+  assert.notEqual(current, old);
+  assert.equal(f.sockets.length, 2);
+  assert.equal(f.connection.retry, null);
+  assert.equal(f.requests.length, 0);
+  old.message({ type: 'pong' }); old.emit('close');
+  assert.equal(f.connection.ws, current);
+  current.open(); current.message(joined);
+  assert.equal(current.sent[0].token, 'secret');
+  assert.equal(f.connection.phase, 'ready');
+});
+
+test('returning before a delayed probe timer fires replaces an unresponsive socket immediately', () => {
+  const f = browser(); f.connection.join(hello);
+  const old = f.sockets[0]; old.open(); old.message(joined);
+  f.document.visibilityState = 'hidden'; f.event('document', 'visibilitychange');
+  f.document.visibilityState = 'visible'; f.event('document', 'visibilitychange');
+  f.document.visibilityState = 'hidden'; f.event('document', 'visibilitychange');
+  f.elapse(1500);
+  f.document.visibilityState = 'visible'; f.event('document', 'visibilitychange');
+  f.event('document', 'resume');
+  assert.notEqual(f.connection.ws, old);
+  assert.equal(f.sockets.length, 2);
+  assert.equal(f.connection.probe, null);
+});
+
+test('returning to the tab bypasses accumulated retry backoff immediately', () => {
+  const f = browser(); f.connection.join(hello);
+  for (let attempt = 0; attempt < 5; attempt++) {
+    f.connection.ws.emit('error');
+    f.advance(f.timers.get(f.connection.retry).delay);
+  }
+  f.document.visibilityState = 'hidden'; f.event('document', 'visibilitychange');
+  f.connection.ws.emit('error');
+  assert.ok(f.timers.get(f.connection.retry).delay >= 4800);
+  const count = f.sockets.length;
+  f.document.visibilityState = 'visible'; f.event('document', 'visibilitychange');
+  f.event('document', 'resume'); f.event('window', 'pageshow');
+  assert.equal(f.sockets.length, count + 1);
+  assert.equal(f.connection.retry, null);
+  assert.equal(f.connection.attempts, 0);
+  f.connection.ws.open(); f.connection.ws.message(joined);
+  assert.equal(f.connection.phase, 'ready');
+});
+
+test('offline and destroy cancel pending foreground probes', () => {
+  for (const event of ['offline', 'destroy']) {
+    const f = browser(); f.connection.join(hello);
+    const socket = f.sockets[0]; socket.open(); socket.message(joined);
+    f.document.visibilityState = 'hidden'; f.event('document', 'visibilitychange');
+    f.document.visibilityState = 'visible'; f.event('document', 'visibilitychange');
+    assert.ok(f.connection.probe);
+    if (event === 'offline') {
+      f.navigator.onLine = false; f.event('window', 'offline');
+    } else f.connection.destroy();
+    assert.equal(f.timers.size, 0);
+    f.advance(10000);
+    assert.equal(f.sockets.length, 1);
+  }
+});
+
+test('page restoration and resume replace suspended sockets without duplicate attempts', () => {
+  for (const event of ['pagehide', 'freeze']) {
     const f = browser(); f.connection.join(hello);
     const old = f.sockets[0]; old.open(); old.message(joined);
-    if (event === 'hidden') {
-      f.document.visibilityState = 'hidden'; f.event('document', 'visibilitychange');
-      f.document.visibilityState = 'visible';
-    } else f.event(event === 'freeze' ? 'document' : 'window', event);
+    f.event(event === 'freeze' ? 'document' : 'window', event);
     f.event('document', 'visibilitychange'); f.event('document', 'resume'); f.event('window', 'pageshow');
     const current = f.connection.ws;
     assert.notEqual(current, old);

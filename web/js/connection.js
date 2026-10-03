@@ -11,6 +11,8 @@ class UnoConnection {
     this.deadlineAt = 0;
     this.retry = null;
     this.heartbeat = null;
+    this.probe = null;
+    this.probeAt = 0;
     this.validation = null;
     this.lastMessageAt = 0;
     this.paused = false;
@@ -33,12 +35,24 @@ class UnoConnection {
     this.recover = () => {
       if (this.disposed || navigator.onLine === false || document.visibilityState === 'hidden') return;
       this.paused = false;
+      const backgrounded = this.backgrounded;
       const stale = (this.deadline !== null && Date.now() >= this.deadlineAt) ||
+        (this.probe !== null && Date.now() >= this.probeAt) ||
+        (this.ws && this.ws.readyState > WebSocket.OPEN) ||
         (this.ws?.readyState === WebSocket.OPEN &&
-          (this.backgrounded || Date.now() - this.lastMessageAt >= 30000));
+          Date.now() - this.lastMessageAt >= 30000);
       this.backgrounded = false;
       if (stale) this.retire();
-      if (this.ws) return; // The first event already started a handshake.
+      if (this.ws) {
+        // A tab switch does not imply a lost connection. Check it without
+        // interrupting the game or restarting a handshake already in flight.
+        if (backgrounded && this.ws.readyState === WebSocket.OPEN && this.deadline === null && this.probe === null) {
+          this.probeAt = Date.now() + 1000;
+          this.probe = setTimeout(this.recover, 1000);
+          this.write(this.ws, { type: 'ping' });
+        }
+        return;
+      }
       clearTimeout(this.retry);
       this.retry = null;
       this.attempts = 0;
@@ -138,6 +152,8 @@ class UnoConnection {
       try { message = JSON.parse(event.data); } catch { this.failed(ws); return; }
       if (!message || typeof message.type !== 'string') { this.failed(ws); return; }
       this.lastMessageAt = Date.now();
+      clearTimeout(this.probe);
+      this.probe = null;
       if (message.type === 'heartbeat' || message.type === 'pong') return;
       if (message.type === 'error' && this.phase === 'joining') {
         this.reset();
@@ -202,7 +218,8 @@ class UnoConnection {
     this.pending = [];
     clearTimeout(this.deadline);
     clearInterval(this.heartbeat);
-    this.deadline = this.heartbeat = null;
+    clearTimeout(this.probe);
+    this.deadline = this.heartbeat = this.probe = null;
     if (ws) ws.close();
   }
 
