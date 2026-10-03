@@ -151,6 +151,8 @@ document.addEventListener('alpine:init', () => {
     _lastMessageAt: 0,
     _recoverConnection: null,
     _goOffline: null,
+    _suspendConnection: null,
+    _suspended: false,
     _recoveryTimer: null,
     _validation: null,
     _validationTimer: null,
@@ -213,6 +215,7 @@ document.addEventListener('alpine:init', () => {
     init() {
       this._recoverConnection = () => {
         if (document.visibilityState === 'hidden' || navigator.onLine === false) return;
+        this._suspended = false;
         if (!this.roomId && !this._firstHello) return;
         if (this._recoveryTimer !== null) return;
         this._recoveryTimer = setTimeout(() => {
@@ -225,7 +228,8 @@ document.addEventListener('alpine:init', () => {
           this.connect(this.buildReconnectHello());
         }, 100);
       };
-      this._goOffline = () => {
+      this._suspendConnection = () => {
+        this._suspended = true;
         clearTimeout(this._reconnectTimer);
         clearTimeout(this._recoveryTimer);
         this._reconnectTimer = this._recoveryTimer = null;
@@ -237,9 +241,12 @@ document.addEventListener('alpine:init', () => {
         if (ws) ws.close();
         if (this._firstHello) this.status = 'connecting';
       };
+      this._goOffline = this._suspendConnection;
       window.addEventListener('online', this._recoverConnection);
       window.addEventListener('offline', this._goOffline);
       window.addEventListener('pageshow', this._recoverConnection);
+      window.addEventListener('pagehide', this._suspendConnection);
+      document.addEventListener('freeze', this._suspendConnection);
       document.addEventListener('resume', this._recoverConnection);
       document.addEventListener('visibilitychange', this._recoverConnection);
       this.registerServiceWorker();
@@ -302,7 +309,7 @@ document.addEventListener('alpine:init', () => {
     /** @returns {void} */
     registerServiceWorker() {
       if ('serviceWorker' in navigator) {
-        navigator.serviceWorker.register('/sw.js').catch(() => {
+        navigator.serviceWorker.register('/sw.js', { updateViaCache: 'none' }).catch(() => {
           // Non-fatal - app still works without offline support.
         });
       }
@@ -341,7 +348,7 @@ document.addEventListener('alpine:init', () => {
       }
 
       this.status = 'connecting';
-      if (navigator.onLine === false) {
+      if (navigator.onLine === false || this._suspended) {
         const previous = this.ws;
         this.ws = null;
         if (previous) previous.close();
@@ -436,6 +443,8 @@ document.addEventListener('alpine:init', () => {
       window.removeEventListener('online', this._recoverConnection);
       window.removeEventListener('offline', this._goOffline);
       window.removeEventListener('pageshow', this._recoverConnection);
+      window.removeEventListener('pagehide', this._suspendConnection);
+      document.removeEventListener('freeze', this._suspendConnection);
       document.removeEventListener('resume', this._recoverConnection);
       document.removeEventListener('visibilitychange', this._recoverConnection);
       clearTimeout(this._reconnectTimer);
@@ -451,7 +460,7 @@ document.addEventListener('alpine:init', () => {
     /** @returns {void} */
     scheduleReconnect() {
       this.status = 'connecting';
-      if (navigator.onLine === false || this._reconnectTimer !== null) return;
+      if (navigator.onLine === false || this._suspended || this._reconnectTimer !== null) return;
       const delayMs = Math.min(250 * 2 ** Math.min(this.reconnectAttempts, 6), 10000) * (0.75 + Math.random() * 0.5);
       this.reconnectAttempts++;
       this._reconnectTimer = setTimeout(() => {

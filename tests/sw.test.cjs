@@ -21,8 +21,23 @@ test('installed shell starts from its versioned cache without a network request'
     assert.equal(await response, shell);
   }
   assert.equal(networkCalls, 0);
-  assert.ok(cacheNames.every(name => name === 'uno-party-v34'));
+  assert.ok(cacheNames.every(name => name === 'uno-party-v35'));
   let intercepted = false;
   listeners.fetch({ request: { url: 'https://example.test/api/session/ABCDE', method: 'GET' }, respondWith: () => { intercepted = true; } });
   assert.equal(intercepted, false, 'session validation bypasses the cache');
+});
+
+test('a shell update bypasses stale browser HTTP cache entries', async () => {
+  const listeners = {};
+  let assets;
+  let installed;
+  vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../web/sw.js'), 'utf8'), {
+    self: { addEventListener: (name, fn) => { listeners[name] = fn; }, skipWaiting() {} },
+    Request: class { constructor(url, options) { this.url = url; this.cache = options.cache; } },
+    caches: { open: async () => ({ addAll: async requests => { assets = requests; } }) },
+  });
+  listeners.install({ waitUntil: promise => { installed = promise; } });
+  await installed;
+  assert.ok(assets.some(request => request.url === '/js/app.js'));
+  assert.ok(assets.every(request => request.cache === 'reload'));
 });

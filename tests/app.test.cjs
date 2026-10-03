@@ -155,6 +155,50 @@ test('returning from sleep replaces a stale socket and ignores its late close', 
   assert.equal(f.app.status, 'connecting');
 });
 
+test('restoring a recently closed page replaces even a seemingly healthy socket', () => {
+  for (const event of ['pagehide', 'freeze']) {
+    const f = fixture(); f.app.init(); f.join();
+    const old = f.app.ws;
+    f.listeners[event]();
+    assert.equal(f.app.ws, null);
+    assert.equal(f.app._heartbeatTimer, null);
+    assert.equal(f.app.canSend(), false);
+    assert.equal(f.app.token, 'secret');
+    assert.equal(f.app._reconnectTimer, null);
+    f.app.connect(f.hello);
+    assert.equal(f.app.ws, null, 'suspended pages do not start handshakes');
+    f.advance(100);
+    f.listeners.pageshow(); f.listeners.resume(); f.listeners.visibilitychange();
+    f.timers.get(f.app._recoveryTimer).fn();
+    const current = f.app.ws;
+    assert.ok(current);
+    assert.notEqual(current, old);
+    old.emit('close'); old.emit('error');
+    assert.equal(f.app.ws, current);
+    assert.equal(f.app._reconnectTimer, null);
+    current.readyState = 1; current.emit('open');
+    assert.equal(current.sent[0].token, 'secret');
+    assert.equal(current.sent[0].create, false);
+  }
+});
+
+test('pagehide cancels a pending handshake and session check before restore', () => {
+  const f = fixture(); f.app.init(); f.join();
+  f.app.ws.emit('error');
+  const retry = f.app._reconnectTimer;
+  f.listeners.pagehide();
+  assert.equal(f.timers.has(retry), false);
+  assert.equal(f.requests[0].options.signal.aborted, true);
+  f.listeners.pageshow(); f.timers.get(f.app._recoveryTimer).fn();
+  const old = f.app.ws;
+  f.listeners.pagehide();
+  assert.equal(old.readyState, 3);
+  assert.equal(f.app._connectionTimer, null);
+  f.listeners.pageshow(); f.timers.get(f.app._recoveryTimer).fn();
+  assert.ok(f.app.ws);
+  assert.notEqual(f.app.ws, old);
+});
+
 
 test('reconnecting into a rematch removes the old winner and color picker', () => {
   const f = fixture(); f.join();
