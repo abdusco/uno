@@ -21,7 +21,7 @@ test('installed shell starts from its versioned cache without a network request'
     assert.equal(await response, shell);
   }
   assert.equal(networkCalls, 0);
-  assert.ok(cacheNames.every(name => name === 'uno-party-v38'));
+  assert.ok(cacheNames.every(name => name === 'uno-party-v39'));
   let intercepted = false;
   listeners.fetch({ request: { url: 'https://example.test/api/session/ABCDE', method: 'GET' }, respondWith: () => { intercepted = true; } });
   assert.equal(intercepted, false, 'session validation bypasses the cache');
